@@ -4,6 +4,7 @@ Each device is the same code started with a different DEVICE_ID / PORT, so a
 two-device demo is just two processes with two separate data directories.
 """
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
