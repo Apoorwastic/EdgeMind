@@ -47,6 +47,11 @@ def _hosts(spec: str) -> list[tuple[str, int]]:
     return out
 
 
+def _default_data_root() -> Path:
+    """Serverless hosts (Vercel) mount the code read-only; only the temp dir is writable, and it is ephemeral."""
+    return Path(tempfile.gettempdir()) / "edgemind" if os.getenv("VERCEL") else ROOT / "data"
+
+
 def load_settings() -> Settings:
     device_id = os.getenv("DEVICE_ID", "device_a")
     return Settings(
@@ -54,7 +59,7 @@ def load_settings() -> Settings:
         device_name=os.getenv("DEVICE_NAME", device_id.replace("_", " ").title()),
         device_kind=os.getenv("DEVICE_KIND", "laptop"),
         port=int(os.getenv("PORT", "8101")),
-        data_dir=Path(os.getenv("DATA_DIR", ROOT / "data" / device_id)),
+        data_dir=Path(os.getenv("DATA_DIR", _default_data_root() / device_id)),
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
         collection=os.getenv("QDRANT_COLLECTION", "edgemind_shared"),
