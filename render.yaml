@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: edgemind
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: 2c-8g # ~8 GB RAM, matching this project's own "any cloud server" recommendation
+    healthCheckPath: /healthz
+    envVars:
+      - key: CLOUD_API_KEY
+        sync: false # optional: set in the Render dashboard for fast cloud answers; leave unset to stay fully on-device
+      - key: CLOUD_MODEL
+        value: gpt-4o-mini # provider auto-detected from this name — see edge/llm.py
+      - key: ASK_RATE_LIMIT
+        value: "20"
+      - key: SEED_SCENARIO
+        value: home
+    disk:
+      name: edgemind-data
+      mountPath: /data
+      sizeGB: 5

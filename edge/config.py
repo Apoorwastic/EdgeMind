@@ -32,8 +32,9 @@ class Settings:
     local_llm: str
     local_llm_fallback: str
 
-    openai_api_key: str | None
-    openai_model: str
+    cloud_api_key: str | None
+    cloud_model: str
+    cloud_base_url: str | None
 
     web_dist: Path
 
@@ -64,8 +65,12 @@ def load_settings() -> Settings:
         embed_dim=int(os.getenv("EMBED_DIM", "768")),
         local_llm=os.getenv("LOCAL_LLM", "qwen2.5:3b"),
         local_llm_fallback=os.getenv("LOCAL_LLM_FALLBACK", "phi3"),
-        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        # One key + one model name for whichever cloud provider you want (OpenAI, Claude, Gemini,
+        # Mistral, DeepSeek auto-detect from the model name; anything else needs CLOUD_BASE_URL too —
+        # see CloudLLM in llm.py). Empty CLOUD_API_KEY means every question answers on-device.
+        cloud_api_key=os.getenv("CLOUD_API_KEY") or None,
+        cloud_model=os.getenv("CLOUD_MODEL", "gpt-4o-mini"),
+        cloud_base_url=os.getenv("CLOUD_BASE_URL") or None,
         web_dist=ROOT / "web" / "dist",
     )
 
