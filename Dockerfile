@@ -5,7 +5,7 @@
 #
 #   docker build -t edgemind .                        # models baked in (~2.2 GB extra, no download at boot)
 #   docker build -t edgemind --build-arg BAKE_MODELS=0 .   # smaller image, models pulled on first start
-#   docker run -p 7860:7860 -e OPENAI_API_KEY=sk-... edgemind
+#   docker run -p 7860:7860 -e CLOUD_API_KEY=sk-... edgemind
 
 ARG OLLAMA_VERSION=0.34.4
 ARG QDRANT_VERSION=v1.19.1

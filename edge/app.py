@@ -71,7 +71,7 @@ def reset_shared_state() -> None:
 
 syncer = SyncManager(S.device_id, store, cloud, embedder, gate, bus, state, team=team, on_removed=reset_shared_state)
 local_llm = LocalLLM(S.ollama_url, S.local_llm, [S.local_llm_fallback])
-cloud_llm = CloudLLM(S.openai_api_key, S.openai_model, gate)
+cloud_llm = CloudLLM(S.cloud_api_key, S.cloud_model, gate, S.cloud_base_url)
 prefs = {"private_route": "local"}  # "local" = private context never goes to cloud LLM; "redact" = send only shareable context
 chat_path = S.data_dir / "chat.jsonl"
 
@@ -231,7 +231,7 @@ async def get_state():
         "models": {
             "embedder": embedder.name,
             "local_llm": local_llm.model if local_llm.available else None,
-            "cloud_llm": S.openai_model if cloud_llm.configured else None,
+            "cloud_llm": cloud_llm.model if cloud_llm.configured else None,
         },
         "prefs": prefs,
         "team": team.view(),

@@ -1,4 +1,4 @@
-"""Generation: on-device LLM (Ollama) and cloud LLM (OpenAI).
+"""Generation: on-device LLM (Ollama) and cloud LLM (any provider, see CloudLLM below).
 
 Both use the same grounded prompt shape, so the only thing that changes when
 the device goes online is who does the writing, never what context is used.
@@ -7,8 +7,10 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from .network import NetworkGate
@@ -111,19 +113,73 @@ class LocalLLM:
                         break
 
 
+# Endpoints for providers whose OpenAI-compatible API lives at a non-default URL. Keyed by the
+# prefix their own model names always carry, which is what makes auto-detection from the model
+# name alone safe for these — "gemini-...", "mistral-...", "deepseek-..." don't collide with
+# anyone else's naming. Providers that rehost ambiguous names (Groq/OpenRouter serving
+# "llama-..." or "mixtral-...", also used elsewhere) aren't in this table on purpose: guessing
+# wrong would silently send a note's contents to the wrong company. Those still need CLOUD_BASE_URL.
+_OPENAI_COMPATIBLE_ENDPOINTS = {
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "mistral": "https://api.mistral.ai/v1",
+    "deepseek": "https://api.deepseek.com",
+}
+
+
+def _detect_provider(model: str) -> str:
+    if model.startswith("claude"):
+        return "claude"
+    for prefix in _OPENAI_COMPATIBLE_ENDPOINTS:
+        if model.startswith(prefix):
+            return prefix
+    return "openai"  # also the fallback for any name this table doesn't recognise
+
+
 class CloudLLM:
-    def __init__(self, api_key: str | None, model: str, gate: NetworkGate):
+    """One client for any provider — pass its API key and model name and this figures out how to
+    reach it. The provider is auto-detected from the model name for providers with unambiguous
+    naming (OpenAI, Claude, Gemini, Mistral, DeepSeek). Anything else (Groq, OpenRouter, a local
+    OpenAI-compatible server, ...) needs an explicit base_url, because names like "llama-3.3-70b"
+    don't identify a provider on their own — auto-detecting those would risk sending a note to the
+    wrong company with no way to tell from the model name alone.
+
+    Claude is the one provider here that isn't OpenAI-schema compatible (its system prompt is a
+    separate param, not a message with role "system"), so it gets its own client and message shape
+    instead of going through openai.AsyncOpenAI."""
+
+    def __init__(self, api_key: str | None, model: str, gate: NetworkGate, base_url: str | None = None):
         self.model = model
         self.gate = gate
-        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self.provider = "custom" if base_url else _detect_provider(model)
+
+        if self.provider == "claude":
+            self.client = AsyncAnthropic(api_key=api_key) if api_key else None
+            self.dest = "api.anthropic.com"
+            return
+
+        endpoint = base_url or _OPENAI_COMPATIBLE_ENDPOINTS.get(self.provider)  # None -> official OpenAI API
+        self.client = AsyncOpenAI(api_key=api_key, base_url=endpoint) if api_key else None
+        self.dest = urlparse(endpoint).hostname if endpoint else "api.openai.com"
 
     @property
     def configured(self) -> bool:
         return self.client is not None
 
     async def stream(self, messages: list[dict], mem_ids: list[str]) -> AsyncIterator[str]:
+        if self.provider == "claude":
+            system = messages[0]["content"] if messages and messages[0]["role"] == "system" else None
+            turns = [m for m in messages if m["role"] != "system"]
+            size = sum(len(m["content"]) for m in turns) + len(system or "")
+            self.gate.egress(self.dest, "cloud-generate", mem_ids, size)
+            async with self.client.messages.stream(
+                model=self.model, max_tokens=600, system=system, messages=turns
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+            return
+
         size = sum(len(m["content"]) for m in messages)
-        self.gate.egress("api.openai.com", "cloud-generate", mem_ids, size)
+        self.gate.egress(self.dest, "cloud-generate", mem_ids, size)
         resp = await self.client.chat.completions.create(
             model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
         )

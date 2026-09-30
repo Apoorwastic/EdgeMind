@@ -1,9 +1,11 @@
 # Deploy EdgeMind on any cloud server (VM with ~8 GB RAM):
 #
-#   export OPENAI_API_KEY=sk-...          # optional; enables fast cloud answers for general questions
+#   export CLOUD_API_KEY=sk-...           # optional; enables fast cloud answers for general questions
 #   docker compose -f docker-compose.deploy.yml up -d --build
 #
 # Then open http://<server-ip>/ for the demo page. Data (notes, chats, shared store) persists in the volume.
+# CLOUD_API_KEY works with any provider: OpenAI, Claude, Gemini, Mistral and DeepSeek are auto-detected
+# from CLOUD_MODEL's name; anything else (Groq, OpenRouter, ...) also needs CLOUD_BASE_URL — see edge/llm.py.
 services:
   edgemind:
     build: .
@@ -12,8 +14,9 @@ services:
     ports:
       - "80:7860"
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      CLOUD_API_KEY: ${CLOUD_API_KEY:-}
+      CLOUD_MODEL: ${CLOUD_MODEL:-gpt-4o-mini}
+      CLOUD_BASE_URL: ${CLOUD_BASE_URL:-}
       ASK_RATE_LIMIT: ${ASK_RATE_LIMIT:-20}
       SEED_SCENARIO: ${SEED_SCENARIO:-home}
     volumes:
