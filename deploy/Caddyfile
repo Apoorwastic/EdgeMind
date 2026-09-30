@@ -1,0 +1,33 @@
+# Public gateway for the all-in-one EdgeMind container.
+#   /          judge-facing demo page (laptop + phone side by side)
+#   /laptop/   device_a  (desktop UI)
+#   /mobile/   device_b  (phone UI)
+# flush_interval -1 keeps the streaming endpoints (answers as NDJSON, live events as SSE) unbuffered.
+{
+	auto_https off
+	admin off
+}
+
+:{$PORT:7860} {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	redir /laptop /laptop/
+	redir /mobile /mobile/
+
+	handle_path /laptop/* {
+		reverse_proxy 127.0.0.1:8101 {
+			flush_interval -1
+		}
+	}
+	handle_path /mobile/* {
+		reverse_proxy 127.0.0.1:8102 {
+			flush_interval -1
+		}
+	}
+	handle {
+		root * /app/deploy/site
+		file_server
+	}
+}

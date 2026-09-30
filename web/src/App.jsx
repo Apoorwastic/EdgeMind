@@ -1,0 +1,176 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, subscribe } from './api.js'
+import Sidebar from './Sidebar.jsx'
+import TeamView from './TeamView.jsx'
+import AskView from './AskView.jsx'
+import NotesView from './NotesView.jsx'
+import AdminView from './AdminView.jsx'
+import MobileApp from './MobileApp.jsx'
+
+// Hash routes: #/ (new chat), #/chat/<cid>, #/notes, #/team, #/admin, #/admin/<tab>
+function useRoute() {
+  const read = () => (window.location.hash.replace(/^#\/?/, '') || 'ask').split('/')
+  const [route, setRoute] = useState(read)
+  useEffect(() => {
+    const on = () => setRoute(read())
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  const go = (path) => { window.location.hash = `/${path}` }
+  return [route, go]
+}
+
+export default function App() {
+  const [route, go] = useRoute()
+  const [state, setState] = useState(null)
+  const [memories, setMemories] = useState([])
+  const [cloud, setCloud] = useState({ live: false, records: [], as_of: null })
+  const [conflicts, setConflicts] = useState([])
+  const [activity, setActivity] = useState([])
+  const [egress, setEgress] = useState([])
+  const [audit, setAudit] = useState(null)
+  const [particles, setParticles] = useState([])
+  const [transition, setTransition] = useState(null) // 'offline' | 'online' one-shot
+  const [syncing, setSyncing] = useState(false)
+  const [chats, setChats] = useState([])
+  const prevOnline = useRef(null)
+
+  const refresh = useCallback(async () => {
+    const [s, m] = await Promise.all([api.state(), api.memories()])
+    setState(s)
+    setMemories(m)
+  }, [])
+  const refreshCloud = useCallback(async () => {
+    const [c, k, e] = await Promise.all([api.cloud(), api.conflicts(), api.egress()])
+    setCloud(c)
+    setConflicts(k)
+    setEgress(e)
+  }, [])
+  const refreshAudit = useCallback(() => api.audit().then(setAudit).catch(() => {}), [])
+  const refreshChats = useCallback(() => api.chats().then(setChats).catch(() => {}), [])
+
+  useEffect(() => {
+    refresh()
+    refreshCloud()
+    refreshAudit()
+    refreshChats()
+    api.activity().then(setActivity)
+    const poll = setInterval(refresh, 5000)
+    const auditPoll = setInterval(refreshAudit, 20000)
+    let memTimer
+    const off = subscribe({
+      activity: (e) => setActivity((a) => [...a.slice(-299), e]),
+      network: (n) => setState((s) => (s ? { ...s, network: n } : s)),
+      memory: () => {
+        clearTimeout(memTimer)
+        memTimer = setTimeout(refresh, 80)
+      },
+      sync: (e) => {
+        setSyncing(e.phase !== 'end')
+        if (e.phase === 'end') {
+          refresh()
+          refreshCloud()
+          refreshAudit()
+        }
+      },
+      'sync-move': (p) => {
+        const id = `${p.mem_id}-${Date.now()}-${Math.random()}`
+        setParticles((ps) => [...ps, { ...p, id }])
+        setTimeout(() => setParticles((ps) => ps.filter((x) => x.id !== id)), 1800)
+      },
+      conflict: () => api.conflicts().then(setConflicts),
+      chats: refreshChats,
+      team: () => { refresh(); refreshCloud() },
+    })
+    return () => {
+      off()
+      clearInterval(poll)
+      clearInterval(auditPoll)
+    }
+  }, [refresh, refreshCloud, refreshAudit, refreshChats])
+
+  // The browser hears about Wi-Fi drops instantly; ask the device to re-probe instead of waiting for its loop.
+  useEffect(() => {
+    const recheck = () => api.recheckNetwork().then((n) => setState((s) => (s ? { ...s, network: n } : s))).catch(() => {})
+    window.addEventListener('offline', recheck)
+    window.addEventListener('online', recheck)
+    return () => {
+      window.removeEventListener('offline', recheck)
+      window.removeEventListener('online', recheck)
+    }
+  }, [])
+
+  // One-shot banner when connectivity flips.
+  const online = state?.network?.online
+  useEffect(() => {
+    if (online === undefined) return
+    const prev = prevOnline.current
+    prevOnline.current = online
+    if (prev === null || prev === online) return
+    setTransition(online ? 'online' : 'offline')
+    refreshCloud()
+    const t = setTimeout(() => setTransition(null), 2600)
+    return () => clearTimeout(t)
+  }, [online, refreshCloud])
+
+  const toggleNetwork = async () => {
+    const n = await api.setNetwork(state.network.mode === 'offline' ? 'auto' : 'offline')
+    setState((s) => ({ ...s, network: n }))
+  }
+
+  if (!state) {
+    return <div className="boot"><span className="boot-dot" /> Loading your memory…</div>
+  }
+
+  const page = ['notes', 'team', 'admin'].includes(route[0]) ? route[0] : 'ask'
+  const openConflicts = conflicts.filter((c) => !c.resolved).length
+  const chatId = page === 'ask' && route[0] === 'chat' ? route[1] : null
+  const deleteChat = async (cid) => {
+    await api.deleteChat(cid)
+    if (cid === chatId) go('')
+    refreshChats()
+  }
+
+  if (state.device.kind === 'mobile') {
+    return (
+      <MobileApp route={route} go={go} state={state} memories={memories} cloud={cloud} conflicts={conflicts}
+        activity={activity} audit={audit} particles={particles} syncing={syncing} chats={chats} transition={transition}
+        onToggleNetwork={toggleNetwork} onChanged={refresh} onAudit={refreshAudit} onDeleteChat={deleteChat}
+        onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} />
+    )
+  }
+
+  return (
+    <div className={`app ${online ? 'is-online' : 'is-offline'}`}>
+      <Sidebar state={state} page={page} memories={memories} cloud={cloud} audit={audit} alerts={openConflicts}
+        syncing={syncing} particles={particles} onToggleNetwork={toggleNetwork}
+        chats={chats} chatId={chatId} onDeleteChat={deleteChat} />
+
+      {transition && (
+        <div className={`toast ${transition}`} role="status">
+          {transition === 'offline'
+            ? <><b>You're offline.</b> Everything still works — shared notes will sync when you're back.</>
+            : <><b>Back online.</b> Syncing your shared notes now.</>}
+        </div>
+      )}
+
+      <main className="page">
+        {page === 'notes' && (
+          <NotesView memories={memories} state={state} onChanged={refresh} />
+        )}
+        {page === 'team' && <TeamView cloud={cloud} state={state} />}
+        {page === 'admin' && (
+          <AdminView tab={route[1] || 'overview'} go={go} state={state} memories={memories} cloud={cloud}
+            conflicts={conflicts} egress={egress} activity={activity} audit={audit} particles={particles}
+            syncing={syncing} onAudit={refreshAudit} onToggleNetwork={toggleNetwork}
+            onPrefs={async (v) => { await api.setPrefs(v); refresh() }}
+            onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} />
+        )}
+        {page === 'ask' && (
+          <AskView state={state} memories={memories} onChanged={refresh} activity={activity}
+            cid={chatId} onChatStarted={(cid) => go(`chat/${cid}`)} />
+        )}
+      </main>
+    </div>
+  )
+}

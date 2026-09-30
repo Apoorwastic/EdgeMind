@@ -1,0 +1,24 @@
+# Deploy EdgeMind on any cloud server (VM with ~8 GB RAM):
+#
+#   export OPENAI_API_KEY=sk-...          # optional; enables fast cloud answers for general questions
+#   docker compose -f docker-compose.deploy.yml up -d --build
+#
+# Then open http://<server-ip>/ for the demo page. Data (notes, chats, shared store) persists in the volume.
+services:
+  edgemind:
+    build: .
+    image: edgemind:latest
+    container_name: edgemind
+    ports:
+      - "80:7860"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ASK_RATE_LIMIT: ${ASK_RATE_LIMIT:-20}
+      SEED_SCENARIO: ${SEED_SCENARIO:-home}
+    volumes:
+      - edgemind-data:/data
+    restart: unless-stopped
+
+volumes:
+  edgemind-data:

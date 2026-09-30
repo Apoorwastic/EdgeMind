@@ -1,0 +1,8 @@
+.venv
+data
+tools
+web/node_modules
+web/dist
+**/__pycache__
+.env
+*.log
