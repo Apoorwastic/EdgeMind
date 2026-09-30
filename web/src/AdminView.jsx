@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ago, api, deviceName, fmtTime } from './api.js'
 import { Icon } from './icons.jsx'
 import TeamPanel from './TeamPanel.jsx'
+import OfflineAI from './OfflineAI.jsx'
 
 const TABS = [
   ['overview', 'Overview', 'grid'],
@@ -81,7 +82,7 @@ function Overview({ state, audit, cloud, conflicts, particles, syncing }) {
         <h3>Health</h3>
         <div className="health-grid">
           <Health icon={network.online ? 'link' : 'unlink'} ok={network.online} warn={network.mode === 'offline'}
-            title={network.online ? 'Online' : network.mode === 'offline' ? 'Offline (manual)'
+            title={network.online ? 'Online' : network.mode === 'browser' ? 'Running in this browser' : network.mode === 'offline' ? 'Offline (manual)'
               : network.internet === false ? 'No internet' : 'No connection'}
             detail={`since ${ago(network.since)}`} />
           <Health icon="server" ok={network.cloud_reachable} title="Qdrant Server"
@@ -94,6 +95,8 @@ function Overview({ state, audit, cloud, conflicts, particles, syncing }) {
           <Health icon="cloud" ok={!!models.cloud_llm} warn title="Cloud AI" detail={models.cloud_llm || (models.cloud_llm_error ? 'key rejected' : 'no key')} />
         </div>
       </section>
+
+      <OfflineAI state={state} />
     </>
   )
 }

@@ -160,7 +160,7 @@
           <li><b>Evolving memory</b><span>Spots when a new note updates an old one; newer facts win in answers</span></li>
           <li><b>Honest answers</b><span>Cites the notes it used; general-knowledge answers are clearly labelled</span></li>
         </ul>
-        <p class="note">This is a shared public demo: everyone sees the same two devices. The AI runs on this server, so for true on-device privacy EdgeMind runs locally on your own machine.</p>
+        <p class="note">This is a shared public demo: everyone sees the same two devices. The AI runs on this server, so for true on-device privacy EdgeMind runs locally on your own machine. Open it once online and it keeps working in your browser without internet; download the offline AI in Admin to get answers too.</p>
       </div>
     </section>
   </div>
@@ -187,6 +187,8 @@
     window.addEventListener('resize', fit)
     window.addEventListener('load', fit)
     fit()
+    // Open once online and this page keeps working without internet (each device page has its own worker).
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
   </script>
 </body>
 </html>

@@ -87,6 +87,7 @@ export default function Sidebar({ state, page, memories, cloud, audit, alerts, s
           <span className="conn-text">
             <b>{online ? 'Online' : 'Offline'}</b>
             <small>{online ? (syncing ? 'syncing…' : `synced ${ago(sync.last_sync)}`)
+              : network.mode === 'browser' ? 'running in this browser'
               : network.mode === 'offline' ? 'offline mode on'
               : network.quality === 'weak' ? 'weak internet' : 'no internet'}</small>
           </span>

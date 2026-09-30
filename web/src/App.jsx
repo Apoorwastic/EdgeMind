@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, subscribe } from './api.js'
+import { api, link, subscribe } from './api.js'
 import Sidebar from './Sidebar.jsx'
 import TeamView from './TeamView.jsx'
 import AskView from './AskView.jsx'
@@ -20,8 +20,8 @@ function useRoute() {
   return [route, go]
 }
 
-// The device runs wherever this page was served from. If that's a hosted server, turning off
-// Wi-Fi cuts the browser off from the device itself, so offline answers are impossible there.
+// Shown only when the device can't be reached AND this browser has no copy of it yet
+// (with a copy, the page quietly switches to browser mode instead).
 const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\])/.test(window.location.hostname)
 
 function DeviceUnreachable() {
@@ -30,7 +30,7 @@ function DeviceUnreachable() {
       <b>Can’t reach this EdgeMind device.</b>{' '}
       {LOCAL_HOST
         ? 'It runs on this computer — check that it’s still running (EdgeMind.bat or scripts\\start.ps1).'
-        : 'This demo’s devices run on a cloud server, so they need internet. To try offline mode here, use the Online/Offline switch instead of turning off Wi-Fi — or run EdgeMind on your own computer for real offline use.'}
+        : 'Open this link once while you’re online — after that it keeps working in this browser without internet.'}
     </div>
   )
 }
@@ -109,6 +109,11 @@ export default function App() {
       clearInterval(auditPoll)
     }
   }, [refresh, refreshCloud, refreshAudit, refreshChats])
+
+  // Device became unreachable (browser mode) or came back (queued notes were just replayed): reload everything.
+  useEffect(() => link.onChats(refreshChats), [refreshChats])
+  useEffect(() => link.subscribe(() => { refresh(); refreshCloud().catch(() => {}); refreshAudit(); refreshChats() }),
+    [refresh, refreshCloud, refreshAudit, refreshChats])
 
   // The browser hears about Wi-Fi drops instantly; ask the device to re-probe instead of waiting for its loop.
   useEffect(() => {
