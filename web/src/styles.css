@@ -258,6 +258,13 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .toast.offline b { color: var(--bad); }
 .toast.online { border-color: rgba(94, 230, 160, 0.5); box-shadow: 0 0 40px -10px var(--shared); }
 .toast.online b { color: var(--shared); }
+.reach-banner {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 60;
+  width: min(640px, calc(100vw - 32px)); padding: 12px 18px; border-radius: var(--r);
+  font-size: 14px; line-height: 1.5; background: rgba(20, 20, 22, 0.92); backdrop-filter: var(--blur);
+  border: 1px solid rgba(255, 107, 91, 0.5); box-shadow: 0 0 40px -10px var(--bad);
+}
+.reach-banner b { color: var(--bad); }
 @keyframes toast { 0% { opacity: 0; transform: translate(-50%, -8px); } 10%, 85% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; } }
 
 /* ---------------------------------------------------------------- orb */

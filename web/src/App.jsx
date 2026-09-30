@@ -20,6 +20,21 @@ function useRoute() {
   return [route, go]
 }
 
+// The device runs wherever this page was served from. If that's a hosted server, turning off
+// Wi-Fi cuts the browser off from the device itself, so offline answers are impossible there.
+const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\])/.test(window.location.hostname)
+
+function DeviceUnreachable() {
+  return (
+    <div className="reach-banner" role="alert">
+      <b>Can’t reach this EdgeMind device.</b>{' '}
+      {LOCAL_HOST
+        ? 'It runs on this computer — check that it’s still running (EdgeMind.bat or scripts\\start.ps1).'
+        : 'This demo’s devices run on a cloud server, so they need internet. To try offline mode here, use the Online/Offline switch instead of turning off Wi-Fi — or run EdgeMind on your own computer for real offline use.'}
+    </div>
+  )
+}
+
 export default function App() {
   const [route, go] = useRoute()
   const [state, setState] = useState(null)
@@ -33,12 +48,18 @@ export default function App() {
   const [transition, setTransition] = useState(null) // 'offline' | 'online' one-shot
   const [syncing, setSyncing] = useState(false)
   const [chats, setChats] = useState([])
+  const [unreachable, setUnreachable] = useState(false) // the device process itself can't be reached
   const prevOnline = useRef(null)
 
   const refresh = useCallback(async () => {
-    const [s, m] = await Promise.all([api.state(), api.memories()])
-    setState(s)
-    setMemories(m)
+    try {
+      const [s, m] = await Promise.all([api.state(), api.memories()])
+      setState(s)
+      setMemories(m)
+      setUnreachable(false)
+    } catch {
+      setUnreachable(true)
+    }
   }, [])
   const refreshCloud = useCallback(async () => {
     const [c, k, e] = await Promise.all([api.cloud(), api.conflicts(), api.egress()])
@@ -51,10 +72,10 @@ export default function App() {
 
   useEffect(() => {
     refresh()
-    refreshCloud()
+    refreshCloud().catch(() => {})
     refreshAudit()
     refreshChats()
-    api.activity().then(setActivity)
+    api.activity().then(setActivity).catch(() => {})
     const poll = setInterval(refresh, 5000)
     const auditPoll = setInterval(refreshAudit, 20000)
     let memTimer
@@ -118,8 +139,9 @@ export default function App() {
     setState((s) => ({ ...s, network: n }))
   }
 
+  const banner = unreachable && <DeviceUnreachable />
   if (!state) {
-    return <div className="boot"><span className="boot-dot" /> Loading your memory…</div>
+    return <>{banner}<div className="boot"><span className="boot-dot" /> {unreachable ? 'Can’t reach this device…' : 'Loading your memory…'}</div></>
   }
 
   const page = ['notes', 'team', 'admin'].includes(route[0]) ? route[0] : 'ask'
@@ -133,14 +155,15 @@ export default function App() {
 
   if (state.device.kind === 'mobile') {
     return (
-      <MobileApp route={route} go={go} state={state} memories={memories} cloud={cloud} conflicts={conflicts}
+      <>{banner}<MobileApp route={route} go={go} state={state} memories={memories} cloud={cloud} conflicts={conflicts}
         activity={activity} audit={audit} particles={particles} syncing={syncing} chats={chats} transition={transition}
         onToggleNetwork={toggleNetwork} onChanged={refresh} onAudit={refreshAudit} onDeleteChat={deleteChat}
-        onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} />
+        onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} /></>
     )
   }
 
   return (
+    <>{banner}
     <div className={`app ${online ? 'is-online' : 'is-offline'}`}>
       <Sidebar state={state} page={page} memories={memories} cloud={cloud} audit={audit} alerts={openConflicts}
         syncing={syncing} particles={particles} onToggleNetwork={toggleNetwork}
@@ -172,5 +195,6 @@ export default function App() {
         )}
       </main>
     </div>
+    </>
   )
 }
