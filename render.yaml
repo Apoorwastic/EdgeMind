@@ -4,7 +4,11 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: 2c-8g # ~8 GB RAM, matching this project's own "any cloud server" recommendation
+    # Free tier: 512 MB RAM, no payment info needed. Ollama (qwen2.5:3b, ~2 GB) + Qdrant + two Python
+    # device processes + Caddy in one container will almost certainly be OOM-killed at this size — this
+    # project's own README asks for ~8 GB (plan 2c-8g) for a reason. Use free only to see the Blueprint
+    # deploy and the gateway page come up; switch back to a paid plan for the app to actually answer.
+    plan: free
     healthCheckPath: /healthz
     envVars:
       - key: CLOUD_API_KEY
@@ -15,7 +19,5 @@ services:
         value: "20"
       - key: SEED_SCENARIO
         value: home
-    disk:
-      name: edgemind-data
-      mountPath: /data
-      sizeGB: 5
+    # Free tier doesn't support persistent disks — data resets on every restart/deploy. SEED_DEMO
+    # re-seeds automatically in that case (same caveat as the README's Hugging Face Spaces section).
