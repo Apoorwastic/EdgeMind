@@ -1,8 +1,21 @@
 // Thin client for the device API. Everything is relative, so the same build
 // talks to whichever device process served it.
 
+// Toggling Wi-Fi makes the browser abort requests for a moment (net::ERR_NETWORK_CHANGED), even to
+// localhost. The device itself is still up, so retry network-level failures briefly before giving up.
+async function fetchRetry(path, init, tries = 4) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fetch(path, init)
+    } catch (e) {
+      if (i >= tries || e.name === 'AbortError') throw e
+      await new Promise((res) => setTimeout(res, 400 * i))
+    }
+  }
+}
+
 async function req(method, path, body) {
-  const r = await fetch(path, {
+  const r = await fetchRetry(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -46,11 +59,13 @@ export const api = {
 
   // Streams NDJSON events from /api/ask: chat → retrieval → token* → (reroute) → done.
   // cid continues a conversation; without it the device starts a new one and reports its id.
-  async ask(q, cid, onEvent) {
-    const r = await fetch('api/ask', {
+  // Aborting `signal` (the Stop button) closes the stream; the device stops generating and keeps the partial answer.
+  async ask(q, cid, onEvent, signal) {
+    const r = await fetchRetry('api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ q, cid }),
+      signal,
     })
     if (!r.ok) {
       // e.g. 429 from the public demo's rate limit: show the reason in the answer bubble.

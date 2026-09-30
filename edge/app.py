@@ -232,6 +232,7 @@ async def get_state():
             "embedder": embedder.name,
             "local_llm": local_llm.model if local_llm.available else None,
             "cloud_llm": S.openai_model if cloud_llm.configured else None,
+            "cloud_llm_error": cloud_llm.rejected,
         },
         "prefs": prefs,
         "team": team.view(),
@@ -365,7 +366,7 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
     if not context:
         if gate.online and cloud_llm.configured:
             return "cloud", "no note matched · online → general answer from cloud model", []
-        why = "offline" if not gate.online else "no cloud LLM key"
+        why = "offline" if not gate.online else (cloud_llm.rejected or "no cloud LLM key")
         if local_ok:
             return "local", f"no note matched · {why} → general answer on-device", []
         return "retrieval", f"no note matched · {why} and no on-device model", []
@@ -378,7 +379,7 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
         if local_ok:
             return "local", f"online, but {len(private)} private memories matched → answered on-device", context
         return "retrieval", "private context and no on-device model → retrieval only", context
-    why = "offline" if not gate.online else "no cloud LLM key"
+    why = "offline" if not gate.online else (cloud_llm.rejected or "no cloud LLM key")
     if local_ok:
         return "local", f"{why} → on-device model", context
     return "retrieval", f"{why} and no on-device model → retrieval only", context
@@ -412,65 +413,81 @@ async def ask(body: AskBody, request: Request):
     history = read_chat(cid, 8)
 
     async def run():
-        yield json.dumps({"type": "chat", "cid": cid}) + "\n"
-        bus.emit("searching", {"q": q})
-        hits, timing = await local_search(q)
-        context = [h for h in hits if h["relevant"] and not h.get("superseded_by")]
-        context.sort(key=lambda h: h["ts"], reverse=True)
-        route, reason, used = plan_route(context)
-        used_ids = [h["mem_id"] for h in used]
-        general = not context  # nothing in memory matched → general-knowledge answer
-        mode = "general" if general else "memory"
-        max_tokens = 600 if general else 300
-        yield json.dumps({"type": "retrieval", "hits": [public(h) for h in hits], "timing": timing,
-                          "route": route, "reason": reason, "used": used_ids, "mode": mode}) + "\n"
-        bus.activity("ask", f"'{q[:48]}' → {len(context)} relevant local memories · route: {route} ({reason})",
-                     route=route, used=used_ids, timing=timing)
+        # Stop in the UI aborts the request; Starlette then cancels this generator mid-await, which also
+        # closes the model stream. The finally keeps whatever was answered so far in the chat.
+        answer, final_route, used, mode, done = "", "retrieval", [], "memory", False
 
-        answer = ""
-        final_route = route
-        if route in ("cloud", "local"):
-            hist = [t for t in history if not t.get("private")] if route == "cloud" else history
-            msgs = build_messages(q, used, hist, general=general)
-            try:
-                gen = cloud_llm.stream(msgs, used_ids) if route == "cloud" else local_llm.stream(msgs, max_tokens)
-                async for tok in gen:
-                    answer += tok
-                    yield json.dumps({"type": "token", "t": tok}) + "\n"
-            except OfflineError:
-                final_route = "retrieval"
-                reason_fb = "went offline mid-answer"
-            except Exception as e:
-                final_route = "retrieval"
-                reason_fb = f"{route} model error: {type(e).__name__}"
-            if final_route == "retrieval":
-                # Fall back to the local model if cloud failed, else to honest retrieval.
-                if route == "cloud" and local_llm.available:
-                    final_route = "local"
-                    yield json.dumps({"type": "reroute", "route": "local", "reason": reason_fb + " → on-device model"}) + "\n"
-                    answer = ""
-                    try:
-                        async for tok in local_llm.stream(build_messages(q, context, history, general=general), max_tokens):
-                            answer += tok
-                            yield json.dumps({"type": "token", "t": tok}) + "\n"
-                    except Exception:
-                        final_route = "retrieval"
+        def save(stopped: bool = False) -> None:
+            ts = now_ms()
+            is_private = any(h["sensitivity"] == "private" for h in used) and final_route != "cloud"
+            append_chat({"cid": cid, "role": "user", "text": q, "ts": ts, "private": is_private})
+            append_chat({"cid": cid, "role": "assistant", "text": answer, "ts": ts, "route": final_route,
+                         "used": [h["mem_id"] for h in used], "private": is_private, "mode": mode,
+                         **({"stopped": True} if stopped else {})})
+            bus.emit("chats", None)
+
+        try:
+            yield json.dumps({"type": "chat", "cid": cid}) + "\n"
+            bus.emit("searching", {"q": q})
+            hits, timing = await local_search(q)
+            context = [h for h in hits if h["relevant"] and not h.get("superseded_by")]
+            context.sort(key=lambda h: h["ts"], reverse=True)
+            route, reason, used = plan_route(context)
+            used_ids = [h["mem_id"] for h in used]
+            general = not context  # nothing in memory matched → general-knowledge answer
+            mode = "general" if general else "memory"
+            max_tokens = 600 if general else 300
+            yield json.dumps({"type": "retrieval", "hits": [public(h) for h in hits], "timing": timing,
+                              "route": route, "reason": reason, "used": used_ids, "mode": mode}) + "\n"
+            bus.activity("ask", f"'{q[:48]}' → {len(context)} relevant local memories · route: {route} ({reason})",
+                         route=route, used=used_ids, timing=timing)
+
+            final_route = route
+            if route in ("cloud", "local"):
+                hist = [t for t in history if not t.get("private")] if route == "cloud" else history
+                msgs = build_messages(q, used, hist, general=general)
+                try:
+                    gen = cloud_llm.stream(msgs, used_ids) if route == "cloud" else local_llm.stream(msgs, max_tokens)
+                    async for tok in gen:
+                        answer += tok
+                        yield json.dumps({"type": "token", "t": tok}) + "\n"
+                except OfflineError:
+                    final_route = "retrieval"
+                    reason_fb = "went offline mid-answer"
+                except Exception as e:
+                    final_route = "retrieval"
+                    reason_fb = f"{route} model error: {type(e).__name__}"
+                    if route == "cloud" and cloud_llm.rejected:
+                        reason_fb = cloud_llm.rejected
+                        bus.activity("system", f"{cloud_llm.rejected} — answering on-device until the key in .env is fixed and the device restarted")
                 if final_route == "retrieval":
-                    yield json.dumps({"type": "reroute", "route": "retrieval", "reason": reason_fb}) + "\n"
+                    # Fall back to the local model if cloud failed, else to honest retrieval.
+                    if route == "cloud" and local_llm.available:
+                        final_route = "local"
+                        yield json.dumps({"type": "reroute", "route": "local", "reason": reason_fb + " → on-device model"}) + "\n"
+                        answer = ""
+                        try:
+                            async for tok in local_llm.stream(build_messages(q, context, history, general=general), max_tokens):
+                                answer += tok
+                                yield json.dumps({"type": "token", "t": tok}) + "\n"
+                        except Exception:
+                            final_route = "retrieval"
+                    if final_route == "retrieval":
+                        yield json.dumps({"type": "reroute", "route": "retrieval", "reason": reason_fb}) + "\n"
 
-        if final_route == "retrieval":
-            answer = ("No generator available, so here is what your local memory says, verbatim:\n"
-                      + "\n".join(f"• {h['text']}" for h in context[:4])) if context else \
-                     "Nothing in local memory matches that yet."
-            yield json.dumps({"type": "token", "t": answer}) + "\n"
+            if final_route == "retrieval":
+                answer = ("No generator available, so here is what your local memory says, verbatim:\n"
+                          + "\n".join(f"• {h['text']}" for h in context[:4])) if context else \
+                         "Nothing in local memory matches that yet."
+                yield json.dumps({"type": "token", "t": answer}) + "\n"
 
-        ts = now_ms()
-        is_private = any(h["sensitivity"] == "private" for h in used) and final_route != "cloud"
-        append_chat({"cid": cid, "role": "user", "text": q, "ts": ts, "private": is_private})
-        append_chat({"cid": cid, "role": "assistant", "text": answer, "ts": ts, "route": final_route,
-                     "used": used_ids, "private": is_private, "mode": mode})
-        bus.emit("chats", None)
-        yield json.dumps({"type": "done", "route": final_route, "mode": mode}) + "\n"
+            save()
+            done = True
+            yield json.dumps({"type": "done", "route": final_route, "mode": mode}) + "\n"
+        finally:
+            if not done:
+                bus.activity("ask", f"'{q[:48]}' stopped by user after {len(answer)} characters", route=final_route)
+                save(stopped=True)
 
     return StreamingResponse(run(), media_type="application/x-ndjson")
 
@@ -606,7 +623,7 @@ async def privacy_audit():
                for r in store.all() if r.get("sensitivity") == "private"}
     # A record shared earlier and later re-tagged private legitimately appears in the ledger from
     # before the re-tag, so only outbound calls made while it was private count as violations.
-    leaked = sorted({m for e in gate.ledger for m in e.mem_ids if m in private and e.ts >= private[m]})
+    leaked = sorted(m for m, ts in gate.last_sent.items() if m in private and ts >= private[m])
     in_cloud: list[str] | None = None
     if gate.online and cloud.active:
         try:
@@ -618,7 +635,7 @@ async def privacy_audit():
     retracting = {r["mem_id"] for r in state["retractions"]}
     return {
         "private_records": len(private),
-        "outbound_calls": len(gate.ledger),
+        "outbound_calls": gate.calls,
         "private_in_outbound": leaked,
         "private_in_cloud": in_cloud,
         "pending_retraction": sorted(retracting & set(private)),

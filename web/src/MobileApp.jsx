@@ -84,11 +84,12 @@ function SyncTab({ state, audit, conflicts, activity, particles, syncing, onTogg
             <b>{online ? 'Online' : 'Offline'}</b>
             <span>{online
               ? (syncing ? 'Syncing now…' : `Last synced ${ago(sync.last_sync)}`)
-              : network.mode === 'offline' ? 'Offline mode is on'
-                : network.internet === false ? 'No internet — retrying' : 'No connection — retrying'}</span>
+              : network.mode === 'offline' ? 'Offline mode is on — tap to go online'
+                : network.quality === 'weak' ? 'Weak internet — switched to offline'
+                : network.internet === false ? 'No internet — switched to offline' : 'No connection — retrying'}</span>
           </div>
-          <button className={`m-switch ${network.mode === 'offline' ? '' : 'on'}`} role="switch"
-            aria-checked={network.mode !== 'offline'} aria-label="Connectivity" onClick={onToggleNetwork}>
+          <button className={`m-switch ${online ? 'on' : ''}`} role="switch"
+            aria-checked={online} aria-label="Connectivity" onClick={onToggleNetwork}>
             <i />
           </button>
         </div>

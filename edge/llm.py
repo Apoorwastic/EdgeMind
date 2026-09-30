@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
 from .network import NetworkGate
 
@@ -116,17 +116,23 @@ class CloudLLM:
         self.model = model
         self.gate = gate
         self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self.rejected: str | None = None  # set once OpenAI refuses the key; .env is only read at boot
 
     @property
     def configured(self) -> bool:
-        return self.client is not None
+        return self.client is not None and self.rejected is None
 
     async def stream(self, messages: list[dict], mem_ids: list[str]) -> AsyncIterator[str]:
         size = sum(len(m["content"]) for m in messages)
         self.gate.egress("api.openai.com", "cloud-generate", mem_ids, size)
-        resp = await self.client.chat.completions.create(
-            model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
-        )
+        try:
+            resp = await self.client.chat.completions.create(
+                model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
+            )
+        except (AuthenticationError, PermissionDeniedError) as e:
+            # A revoked or wrong key never starts working mid-run: stop paying a round trip per question.
+            self.rejected = f"OpenAI rejected the API key ({e.status_code})"
+            raise
         async for chunk in resp:
             if chunk.choices and (t := chunk.choices[0].delta.content):
                 yield t

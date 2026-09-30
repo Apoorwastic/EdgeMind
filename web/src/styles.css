@@ -385,6 +385,9 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 }
 .send:hover:not(:disabled) { box-shadow: var(--glow); }
 .send:disabled { opacity: 0.25; }
+.send.stop, .mode-remember .send.stop { background: var(--glass-2); color: var(--text); border: 1px solid var(--line-2); }
+.send.stop:hover { box-shadow: none; border-color: var(--text-3); }
+.stopped-note { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); }
 .mode-remember .send { background: linear-gradient(135deg, #a78bfa, #c4b5fd); color: #120a2a; }
 .mode-remember .send:hover:not(:disabled) { box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.5), 0 0 32px -6px rgba(167, 139, 250, 0.6); }
 

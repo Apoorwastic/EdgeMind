@@ -91,7 +91,7 @@ function Overview({ state, audit, cloud, conflicts, particles, syncing }) {
             detail={audit ? `${audit.private_in_outbound.length}/${audit.private_records} private leaked` : 'checking…'} />
           <Health icon="search" ok={models.embedder?.startsWith('ollama')} warn title="Embeddings" detail={models.embedder} />
           <Health icon="chip" ok={!!models.local_llm} warn title="On-device AI" detail={models.local_llm || 'not running'} />
-          <Health icon="cloud" ok={!!models.cloud_llm} warn title="Cloud AI" detail={models.cloud_llm || 'no key'} />
+          <Health icon="cloud" ok={!!models.cloud_llm} warn title="Cloud AI" detail={models.cloud_llm || (models.cloud_llm_error ? 'key rejected' : 'no key')} />
         </div>
       </section>
     </>
@@ -312,7 +312,7 @@ function SettingsTab({ state, onPrefs, onToggleNetwork }) {
           <div><span>Port</span><b className="mono">{device.port}</b></div>
           <div><span>Embedder</span><b className="mono">{models.embedder}</b></div>
           <div><span>On-device model</span><b className="mono">{models.local_llm || '—'}</b></div>
-          <div><span>Cloud model</span><b className="mono">{models.cloud_llm || 'no key'}</b></div>
+          <div><span>Cloud model</span><b className="mono">{models.cloud_llm || (models.cloud_llm_error ? 'key rejected — fix .env' : 'no key')}</b></div>
         </div>
       </section>
     </>

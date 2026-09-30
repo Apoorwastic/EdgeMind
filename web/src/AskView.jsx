@@ -159,6 +159,8 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [last, setLast] = useState(null) // last retrieval, shown in the memory rail
+  const [answering, setAnswering] = useState(false)
+  const abort = useRef(null) // aborts the answer being streamed right now
   const scroller = useRef(null)
   const input = useRef(null)
   const online = state.network.online
@@ -190,29 +192,45 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
     setTurns((ts) => [...ts, { role: 'user', text: q, ts: Date.now(), kind: 'chat' },
       { role: 'assistant', text: '', ts: Date.now(), kind: 'chat', pending: true }])
     let askCid = current.current
-    await api.ask(q, askCid, (ev) => {
-      if (ev.type === 'chat') {
-        if (!current.current && askCid === current.current) {
-          current.current = ev.cid
-          onChatStarted(ev.cid)
+    const ctrl = new AbortController()
+    abort.current = ctrl
+    setAnswering(true)
+    try {
+      await api.ask(q, askCid, (ev) => {
+        if (ev.type === 'chat') {
+          if (!current.current && askCid === current.current) {
+            current.current = ev.cid
+            onChatStarted(ev.cid)
+          }
+          askCid = ev.cid
+          return
         }
-        askCid = ev.cid
-        return
+        if (current.current !== askCid) return // user switched chats mid-answer; it is saved on the device anyway
+        if (ev.type === 'retrieval') {
+          setLast({ q, hits: ev.hits.filter((h) => h.relevant), used: ev.used, timing: ev.timing })
+          patchLast((t) => ({ ...t, route: ev.route, mode: ev.mode, reason: ev.reason, used: ev.used, timing: ev.timing,
+            nHits: ev.hits.filter((h) => h.relevant).length }))
+        } else if (ev.type === 'token') {
+          patchLast((t) => ({ ...t, text: t.text + ev.t }))
+        } else if (ev.type === 'reroute') {
+          patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '' }))
+        } else if (ev.type === 'done') {
+          patchLast((t) => ({ ...t, pending: false, route: ev.route }))
+        }
+      }, ctrl.signal)
+    } catch (e) {
+      // Stopped by the user (the device keeps the partial answer), or the connection dropped.
+      if (current.current === askCid) {
+        patchLast((t) => t.pending
+          ? { ...t, pending: false, stopped: ctrl.signal.aborted, text: t.text || (ctrl.signal.aborted ? '' : `Couldn’t reach this device: ${e.message}`) }
+          : t)
       }
-      if (current.current !== askCid) return // user switched chats mid-answer; it is saved on the device anyway
-      if (ev.type === 'retrieval') {
-        setLast({ q, hits: ev.hits.filter((h) => h.relevant), used: ev.used, timing: ev.timing })
-        patchLast((t) => ({ ...t, route: ev.route, mode: ev.mode, reason: ev.reason, used: ev.used, timing: ev.timing,
-          nHits: ev.hits.filter((h) => h.relevant).length }))
-      } else if (ev.type === 'token') {
-        patchLast((t) => ({ ...t, text: t.text + ev.t }))
-      } else if (ev.type === 'reroute') {
-        patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '' }))
-      } else if (ev.type === 'done') {
-        patchLast((t) => ({ ...t, pending: false, route: ev.route }))
-      }
-    })
+    } finally {
+      if (abort.current === ctrl) { abort.current = null; setAnswering(false) }
+    }
   }
+
+  const stop = () => abort.current?.abort()
 
   const remember = async (note) => {
     const res = await api.addMemory(note, sensitivity)
@@ -277,8 +295,10 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 <p className="answer">
                   {t.text || (t.pending
                     ? <span className="thinking"><i /><i /><i /></span>
-                    : t.route === 'retrieval' && !t.used?.length ? 'I couldn’t find anything about that in your notes.' : '')}
+                    : t.stopped ? ''
+                      : t.route === 'retrieval' && !t.used?.length ? 'I couldn’t find anything about that in your notes.' : '')}
                 </p>
+                {t.stopped && <div className="stopped-note"><Icon name="stop" size={11} strokeWidth={2.4} /> Stopped{t.text ? '' : ' before answering'}</div>}
                 <Sources ids={t.used} memories={memories} />
                 {t.mode === 'general' && !t.pending && t.route !== 'retrieval' && (
                   <div className="general-note"><Icon name="info" size={12} /> Not from your notes — check important facts.</div>
@@ -318,11 +338,20 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
           </div>
           <div className="composer-input">
             <textarea ref={input} value={text} rows={2} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && answering) { e.preventDefault(); stop() }
+                else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
+              }}
               placeholder={mode === 'ask' ? 'Type your question…' : 'Type what you want to remember…'} />
-            <button className="send" disabled={busy || !text.trim()} type="submit">
-              {mode === 'ask' ? <><Icon name="arrowUp" size={16} strokeWidth={2.2} /> Ask</> : <><Icon name="check" size={16} strokeWidth={2.2} /> Save</>}
-            </button>
+            {answering ? (
+              <button className="send stop" type="button" onClick={stop} title="Stop answering (Esc)" aria-label="Stop answering">
+                <Icon name="stop" size={14} strokeWidth={2.4} /> Stop
+              </button>
+            ) : (
+              <button className="send" disabled={busy || !text.trim()} type="submit">
+                {mode === 'ask' ? <><Icon name="arrowUp" size={16} strokeWidth={2.2} /> Ask</> : <><Icon name="check" size={16} strokeWidth={2.2} /> Save</>}
+              </button>
+            )}
           </div>
         </form>
       </div>
