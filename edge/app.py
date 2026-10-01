@@ -432,6 +432,8 @@ async def ask(body: AskBody, request: Request):
             hits, timing = await local_search(q)
             context = [h for h in hits if h["relevant"] and not h.get("superseded_by")]
             context.sort(key=lambda h: h["ts"], reverse=True)
+            if not local_llm.available:
+                await local_llm.check()  # Ollama may have come up after boot; don't stay model-less forever
             route, reason, used = plan_route(context)
             used_ids = [h["mem_id"] for h in used]
             general = not context  # nothing in memory matched → general-knowledge answer
@@ -470,15 +472,18 @@ async def ask(body: AskBody, request: Request):
                             async for tok in local_llm.stream(build_messages(q, context, history, general=general), max_tokens):
                                 answer += tok
                                 yield json.dumps({"type": "token", "t": tok}) + "\n"
-                        except Exception:
+                        except Exception as e:
                             final_route = "retrieval"
+                            reason_fb += f" · local model error: {type(e).__name__}"
                     if final_route == "retrieval":
+                        bus.activity("ask", f"'{q[:48]}' → no model answered: {reason_fb}", route="retrieval")
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": reason_fb}) + "\n"
 
             if final_route == "retrieval":
                 answer = ("No generator available, so here is what your local memory says, verbatim:\n"
                           + "\n".join(f"• {h['text']}" for h in context[:4])) if context else \
-                         "Nothing in local memory matches that yet."
+                         ("No note matches that, and no AI model could answer right now "
+                          f"(the on-device model {local_llm.model} isn't responding; is Ollama running?). Try again in a moment.")
                 yield json.dumps({"type": "token", "t": answer}) + "\n"
 
             save()

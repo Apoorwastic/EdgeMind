@@ -68,7 +68,11 @@ ENV HOME=/home/user \
     OLLAMA_URL=http://127.0.0.1:11434 \
     PORT=7860 \
     ASK_RATE_LIMIT=20 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    INTERNET_CHECK=""
+# INTERNET_CHECK is empty because a server is always online, and some hosts (e.g. Railway) block the raw
+# TCP probe to 1.1.1.1/8.8.8.8, which left every device stuck on "no internet". Visitors demo offline
+# mode with the switch; the probe only measures the server's link, never the visitor's Wi-Fi.
 
 USER user
 EXPOSE 7860
