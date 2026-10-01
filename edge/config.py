@@ -33,8 +33,12 @@ class Settings:
     local_llm: str
     local_llm_fallback: str
 
-    openai_api_key: str | None
-    openai_model: str
+    # Cloud model for online answers: Gemini when GEMINI_API_KEY is set, else OpenAI. Both are called
+    # through the OpenAI SDK (Gemini serves an OpenAI-compatible endpoint).
+    cloud_provider: str
+    cloud_api_key: str | None
+    cloud_model: str
+    cloud_base_url: str | None
 
     web_dist: Path
 
@@ -51,6 +55,15 @@ def _hosts(spec: str) -> list[tuple[str, int]]:
 def _default_data_root() -> Path:
     """Serverless hosts (Vercel) mount the code read-only; only the temp dir is writable, and it is ephemeral."""
     return Path(tempfile.gettempdir()) / "edgemind" if os.getenv("VERCEL") else ROOT / "data"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def _cloud_settings() -> dict:
+    if key := os.getenv("GEMINI_API_KEY"):
+        return dict(cloud_provider="Gemini", cloud_api_key=key,
+                    cloud_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), cloud_base_url=GEMINI_BASE_URL)
+    return dict(cloud_provider="OpenAI", cloud_api_key=os.getenv("OPENAI_API_KEY") or None,
+                cloud_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), cloud_base_url=None)
 
 
 def load_settings() -> Settings:
@@ -70,8 +83,7 @@ def load_settings() -> Settings:
         embed_dim=int(os.getenv("EMBED_DIM", "768")),
         local_llm=os.getenv("LOCAL_LLM", "qwen2.5:3b"),
         local_llm_fallback=os.getenv("LOCAL_LLM_FALLBACK", "phi3"),
-        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        **_cloud_settings(),
         web_dist=ROOT / "web" / "dist",
     )
 

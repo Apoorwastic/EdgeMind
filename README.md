@@ -232,7 +232,7 @@ Prerequisites: Python 3.12, Node 20+, and [Ollama](https://ollama.com) with the 
 ```powershell
 ollama pull nomic-embed-text
 ollama pull qwen2.5:3b          # on-device answers (phi3 also works as a fallback)
-copy .env.example .env          # put OPENAI_API_KEY in .env for online generation (optional)
+copy .env.example .env          # put GEMINI_API_KEY (or OPENAI_API_KEY) in .env for online generation (optional)
 powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -Fresh
 python scripts\seed_demo.py     # optional: household demo data (--scenario field for the field-engineer set)
 ```
@@ -257,8 +257,10 @@ It covers ingest, hybrid search, push/pull, idempotent re-sync, the privacy audi
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `OPENAI_API_KEY` | none | Cloud model for general and shareable questions. Without it, the on-device model answers everything |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Cloud model name |
+| `GEMINI_API_KEY` | none | Cloud model (Gemini) for general and shareable questions. Takes priority over `OPENAI_API_KEY`. Without either key, the on-device model answers everything |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name |
+| `OPENAI_API_KEY` | none | Cloud model (OpenAI), used when no Gemini key is set |
+| `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model name |
 | `QDRANT_URL` / `QDRANT_API_KEY` | `http://127.0.0.1:6333` | The shared Qdrant Server |
 | `INTERNET_CHECK` | `1.1.1.1:443,8.8.8.8:443` | Hosts probed to detect internet loss. Empty disables the check (for a LAN-only demo) |
 | `LOCAL_LLM` / `LOCAL_LLM_FALLBACK` | `qwen2.5:3b` / `phi3` | On-device models in Ollama |
@@ -285,7 +287,7 @@ One image runs everything: the Qdrant Server, Ollama with the models baked in, b
    app_port: 7860
    ---
    ```
-3. In **Settings › Variables and secrets**, add `OPENAI_API_KEY` as a *secret* (optional, but it makes general questions fast).
+3. In **Settings › Variables and secrets**, add `GEMINI_API_KEY` (or `OPENAI_API_KEY`) as a *secret* (optional, but it makes general questions fast).
 4. The first build takes about 10–15 min, because it downloads the models into the image.
 
 Free Spaces sleep when idle and reset stored data on restart. The demo re-seeds itself on every fresh start.
@@ -301,7 +303,7 @@ Deployment settings (environment variables):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `OPENAI_API_KEY` | none | Cloud AI for general and shareable questions; without it, the on-device model answers everything |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` | none | Cloud AI for general and shareable questions (Gemini wins if both are set); without either, the on-device model answers everything |
 | `ASK_RATE_LIMIT` | `20` | Questions per minute per visitor (protects your OpenAI bill); `0` turns it off |
 | `SEED_SCENARIO` | `home` | Demo notes loaded on a fresh start (`home` or `field`); set `SEED_DEMO=0` to start empty |
 
