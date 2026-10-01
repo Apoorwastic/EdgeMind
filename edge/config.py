@@ -4,6 +4,7 @@ Each device is the same code started with a different DEVICE_ID / PORT, so a
 two-device demo is just two processes with two separate data directories.
 """
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +52,9 @@ def _hosts(spec: str) -> list[tuple[str, int]]:
     return out
 
 
+def _default_data_root() -> Path:
+    """Serverless hosts (Vercel) mount the code read-only; only the temp dir is writable, and it is ephemeral."""
+    return Path(tempfile.gettempdir()) / "edgemind" if os.getenv("VERCEL") else ROOT / "data"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
@@ -69,7 +73,7 @@ def load_settings() -> Settings:
         device_name=os.getenv("DEVICE_NAME", device_id.replace("_", " ").title()),
         device_kind=os.getenv("DEVICE_KIND", "laptop"),
         port=int(os.getenv("PORT", "8101")),
-        data_dir=Path(os.getenv("DATA_DIR", ROOT / "data" / device_id)),
+        data_dir=Path(os.getenv("DATA_DIR", _default_data_root() / device_id)),
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
         collection=os.getenv("QDRANT_COLLECTION", "edgemind_shared"),
