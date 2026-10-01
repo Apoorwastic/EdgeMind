@@ -68,7 +68,11 @@ ENV HOME=/home/user \
     OLLAMA_URL=http://127.0.0.1:11434 \
     PORT=7860 \
     ASK_RATE_LIMIT=20 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    INTERNET_CHECK=""
+# INTERNET_CHECK is empty because the probe would only measure the server's own link, which is always up,
+# never the visitor's Wi-Fi. A visitor going offline is handled in the browser (cached app + offline AI);
+# the offline switch still forces the server-side devices offline for the demo.
 
 USER user
 EXPOSE 7860

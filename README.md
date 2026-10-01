@@ -3,6 +3,8 @@
 **The AI that remembers you, even when the cloud can't reach you.**
 An offline-first memory assistant for Code Cubicle 6.0, Problem Statement 3 (Qdrant Edge).
 
+**Live demo:** [💻 Laptop](https://edgemind-production-fb04.up.railway.app/laptop/) · [📱 Phone](https://edgemind-production-fb04.up.railway.app/mobile/) (open on a phone) · [Both side by side](https://edgemind-production-fb04.up.railway.app/)
+
 You tell EdgeMind things worth remembering, then ask it questions in plain language. Each device keeps its own semantic memory in an embedded **Qdrant Edge** shard and answers from it with an on-device model, **with or without a network**. Every note is either **Only me** (private: it never leaves the device) or **Team** (shareable: it syncs to your other devices through a central **Qdrant Server** whenever there is a connection). That boundary is enforced in code and can be audited from the UI.
 
 ![EdgeMind on the laptop, answering from a note](docs/screenshots/laptop-answer-from-notes.png)

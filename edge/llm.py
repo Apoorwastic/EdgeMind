@@ -9,9 +9,13 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
 from .network import NetworkGate
+
+
+class OllamaError(RuntimeError):
+    """Ollama refused a request; the message is Ollama's own (e.g. not enough memory to load the model)."""
 
 SYSTEM = (
     "You are EdgeMind, a personal memory assistant. Answer the user's question using ONLY the "
@@ -100,7 +104,13 @@ class LocalLLM:
                 json={"model": self.model, "messages": messages, "stream": True, "keep_alive": KEEP_ALIVE,
                       "options": {"temperature": 0.2, "num_predict": max_tokens, "stop": STOP}},
             ) as r:
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    body = (await r.aread()).decode(errors="replace")
+                    try:
+                        body = json.loads(body).get("error", body)
+                    except (ValueError, AttributeError):
+                        pass
+                    raise OllamaError(f"Ollama {r.status_code}: {body[:200]}")
                 async for line in r.aiter_lines():
                     if not line:
                         continue
@@ -116,17 +126,23 @@ class CloudLLM:
         self.model = model
         self.gate = gate
         self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self.rejected: str | None = None  # set once OpenAI refuses the key; .env is only read at boot
 
     @property
     def configured(self) -> bool:
-        return self.client is not None
+        return self.client is not None and self.rejected is None
 
     async def stream(self, messages: list[dict], mem_ids: list[str]) -> AsyncIterator[str]:
         size = sum(len(m["content"]) for m in messages)
         self.gate.egress("api.openai.com", "cloud-generate", mem_ids, size)
-        resp = await self.client.chat.completions.create(
-            model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
-        )
+        try:
+            resp = await self.client.chat.completions.create(
+                model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
+            )
+        except (AuthenticationError, PermissionDeniedError) as e:
+            # A revoked or wrong key never starts working mid-run: stop paying a round trip per question.
+            self.rejected = f"OpenAI rejected the API key ({e.status_code})"
+            raise
         async for chunk in resp:
             if chunk.choices and (t := chunk.choices[0].delta.content):
                 yield t

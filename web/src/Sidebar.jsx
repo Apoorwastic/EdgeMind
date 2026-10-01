@@ -82,11 +82,14 @@ export default function Sidebar({ state, page, memories, cloud, audit, alerts, s
 
       <div className="side-status">
         <button className={`conn ${online ? 'on' : 'off'}`} onClick={onToggleNetwork}
-          title={network.mode === 'offline' ? 'Go back online' : 'Switch to offline mode'} aria-pressed={online}>
+          title={network.mode === 'offline' ? 'Go back online' : online ? 'Switch to offline mode' : 'Keep offline mode on'} aria-pressed={online}>
           <i className="conn-dot" />
           <span className="conn-text">
             <b>{online ? 'Online' : 'Offline'}</b>
-            <small>{online ? (syncing ? 'syncing…' : `synced ${ago(sync.last_sync)}`) : 'local memory only'}</small>
+            <small>{online ? (syncing ? 'syncing…' : `synced ${ago(sync.last_sync)}`)
+              : network.mode === 'browser' ? 'running in this browser'
+              : network.mode === 'offline' ? 'offline mode on'
+              : network.quality === 'weak' ? 'weak internet' : 'no internet'}</small>
           </span>
           <span className="conn-switch"><span className="conn-knob" /></span>
         </button>

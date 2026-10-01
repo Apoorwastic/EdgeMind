@@ -26,6 +26,7 @@ const P = {
   plus: 'M12 5v14M5 12h14',
   users: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.2a3.5 3.5 0 0 1 0 6.6M18 14a6.5 6.5 0 0 1 3.5 6',
   x: 'M6 6l12 12M18 6 6 18',
+  stop: 'M7 7h10v10H7z',
   server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
   pulse: 'M3 12h4l3-7 4 14 3-7h4',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
