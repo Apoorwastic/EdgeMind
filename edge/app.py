@@ -23,7 +23,7 @@ from .cloud import CloudStore
 from .config import settings
 from .embeddings import Embedder
 from .events import EventBus
-from .llm import CloudLLM, LocalLLM, build_messages
+from .llm import CloudLLM, LocalLLM, OllamaError, build_messages
 from .network import NetworkGate, OfflineError
 from .store import LocalMemory
 from .sync import SyncManager, SyncState
@@ -445,6 +445,7 @@ async def ask(body: AskBody, request: Request):
                          route=route, used=used_ids, timing=timing)
 
             final_route = route
+            local_err = None  # Ollama's own message when the on-device model fails (e.g. not enough memory)
             if route in ("cloud", "local"):
                 hist = [t for t in history if not t.get("private")] if route == "cloud" else history
                 msgs = build_messages(q, used, hist, general=general)
@@ -458,7 +459,9 @@ async def ask(body: AskBody, request: Request):
                     reason_fb = "went offline mid-answer"
                 except Exception as e:
                     final_route = "retrieval"
-                    reason_fb = f"{route} model error: {type(e).__name__}"
+                    if isinstance(e, OllamaError):
+                        local_err = str(e)
+                    reason_fb = f"{route} model error: {local_err or type(e).__name__}"
                     if route == "cloud" and cloud_llm.rejected:
                         reason_fb = cloud_llm.rejected
                         bus.activity("system", f"{cloud_llm.rejected} — answering on-device until the key in .env is fixed and the device restarted")
@@ -474,7 +477,8 @@ async def ask(body: AskBody, request: Request):
                                 yield json.dumps({"type": "token", "t": tok}) + "\n"
                         except Exception as e:
                             final_route = "retrieval"
-                            reason_fb += f" · local model error: {type(e).__name__}"
+                            local_err = str(e) if isinstance(e, OllamaError) else None
+                            reason_fb += f" · local model error: {local_err or type(e).__name__}"
                     if final_route == "retrieval":
                         bus.activity("ask", f"'{q[:48]}' → no model answered: {reason_fb}", route="retrieval")
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": reason_fb}) + "\n"
@@ -482,7 +486,9 @@ async def ask(body: AskBody, request: Request):
             if final_route == "retrieval":
                 answer = ("No generator available, so here is what your local memory says, verbatim:\n"
                           + "\n".join(f"• {h['text']}" for h in context[:4])) if context else \
-                         ("No note matches that, and no AI model could answer right now "
+                         (f"No note matches that, and the on-device model {local_llm.model} couldn't answer. {local_err}"
+                          if local_err else
+                          "No note matches that, and no AI model could answer right now "
                           f"(the on-device model {local_llm.model} isn't responding; is Ollama running?). Try again in a moment.")
                 yield json.dumps({"type": "token", "t": answer}) + "\n"
 

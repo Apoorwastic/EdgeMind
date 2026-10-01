@@ -13,6 +13,10 @@ from openai import AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
 from .network import NetworkGate
 
+
+class OllamaError(RuntimeError):
+    """Ollama refused a request; the message is Ollama's own (e.g. not enough memory to load the model)."""
+
 SYSTEM = (
     "You are EdgeMind, a personal memory assistant. Answer the user's question using ONLY the "
     "memories provided. Memories are listed newest first; if two memories conflict, prefer the newer one "
@@ -100,7 +104,13 @@ class LocalLLM:
                 json={"model": self.model, "messages": messages, "stream": True, "keep_alive": KEEP_ALIVE,
                       "options": {"temperature": 0.2, "num_predict": max_tokens, "stop": STOP}},
             ) as r:
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    body = (await r.aread()).decode(errors="replace")
+                    try:
+                        body = json.loads(body).get("error", body)
+                    except (ValueError, AttributeError):
+                        pass
+                    raise OllamaError(f"Ollama {r.status_code}: {body[:200]}")
                 async for line in r.aiter_lines():
                     if not line:
                         continue

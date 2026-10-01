@@ -70,9 +70,9 @@ ENV HOME=/home/user \
     ASK_RATE_LIMIT=20 \
     PYTHONUNBUFFERED=1 \
     INTERNET_CHECK=""
-# INTERNET_CHECK is empty because a server is always online, and some hosts (e.g. Railway) block the raw
-# TCP probe to 1.1.1.1/8.8.8.8, which left every device stuck on "no internet". Visitors demo offline
-# mode with the switch; the probe only measures the server's link, never the visitor's Wi-Fi.
+# INTERNET_CHECK is empty because the probe would only measure the server's own link, which is always up,
+# never the visitor's Wi-Fi. A visitor going offline is handled in the browser (cached app + offline AI);
+# the offline switch still forces the server-side devices offline for the demo.
 
 USER user
 EXPOSE 7860
