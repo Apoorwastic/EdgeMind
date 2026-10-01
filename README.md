@@ -106,11 +106,49 @@ Retrieval always runs locally first. Then `plan_route()` in `edge/app.py` decide
 |---|---|
 | Offline (or no cloud key) and a note matches | On-device model, answering only from your notes and citing them |
 | Offline and nothing matches | On-device model from general knowledge, labelled **General answer · not from your notes** |
-| Online, a cloud key, and only *Team* notes match | Cloud model (OpenAI) |
+| Online, a cloud key, and only *Team* notes match | Cloud model (Gemini, or OpenAI when no Gemini key is set) |
 | Online, and any *Only me* note matches | On-device model: the private text never leaves (see [privacy](#how-privacy-stays-intact)) |
 | Online and nothing matches | Cloud model from general knowledge. Only the question and non-private chat history are sent |
 | The cloud call fails or the connection drops mid-answer | Rerouted to the on-device model, with the reason shown |
 | No local model running | The matching notes are shown word for word, with nothing generated |
+
+### Offline on the deployed link (in the browser)
+
+Run locally, the "device" is your own computer (`localhost`), so turning the Wi-Fi off changes nothing: the browser still reaches it. A deployed link (Railway, Hugging Face, a VM) is different. With your internet off, the browser can't reach the server at all (`ERR_NAME_NOT_RESOLVED`), and neither can the server's notes or its model. So the page carries its own offline copy of the device's brain:
+
+| Piece | What it does | Where it lives |
+|---|---|---|
+| App shell (service worker, `web/sw.template.js`) | The page itself opens with no internet | Browser Cache Storage |
+| Copy of your notes and chats (`web/src/offline/local.js`) | Refreshed from the device on every online visit. Notes saved offline wait in an outbox and are sent when the device is reachable again | Browser Local Storage |
+| Search (`web/src/offline/brain.js`) | Hybrid search over that copy: keywords, plus meaning once the search model is downloaded | Runs in the page |
+| **Offline AI** (optional download) | Writes answers from your notes, and general answers, using WebLLM on WebGPU | Browser Cache Storage |
+
+When a request to the device fails, `web/src/api.js` switches the page to browser mode, and the status card reads *Offline · running in this browser*. Without the Offline AI, offline answers show the matching notes word for word, and general questions get no written answer.
+
+**Getting ready (once per browser, while online):**
+
+1. Open the deployed link in a recent Chrome or Edge. The Offline AI needs WebGPU.
+2. Go to **Admin › Offline AI** (on the phone: the **Sync** tab), pick **Small** or **Standard**, and press **Download**. Wait until it finishes.
+3. Now go offline and reload. The page opens from the browser, and questions are answered on your computer.
+
+**The models.** Each option has two builds of the same model. Graphics chips that support 16-bit maths (`shader-f16`, most recent laptops and phones) get `q4f16_1`, and older ones get `q4f32_1`. Sizes come from WebLLM 0.2.85 and Hugging Face.
+
+| Option | Model | Download | Graphics memory while answering | Best for |
+|---|---|---|---|---|
+| Small | `Qwen2.5-0.5B-Instruct-q4f16_1-MLC` / `-q4f32_1-MLC` | 290 MB | ≈ 945 MB / ≈ 1,060 MB | Phones |
+| Standard | `Qwen2.5-1.5B-Instruct-q4f16_1-MLC` / `-q4f32_1-MLC` | 880 MB | ≈ 1,630 MB / ≈ 1,890 MB | Laptops |
+| Search model (always included) | `Xenova/all-MiniLM-L6-v2`, 8-bit, runs on the CPU | 23 MB | small | Both |
+
+The models download from Hugging Face and stay inside the browser. You can see them under DevTools › Application › Cache Storage. **Remove download** deletes them.
+
+**Storage and limits:**
+
+- **Laptop:** the 0.3–0.9 GB sits in the browser cache. Chrome and Edge allow a site a large share of free disk, so this is rarely a problem.
+- **Phone:** use Small. Standard needs about 1.6–1.9 GB of graphics memory, which phones with 6 GB of RAM or less often can't spare: the tab gets slow or crashes. Download on Wi-Fi.
+- **The browser may delete the download.** The app doesn't request persistent storage, so a browser short on space can clear the cached model, and it then has to be downloaded again. Safari also deletes a site's data after 7 days without a visit.
+- **Each browser keeps its own copy.** A browser that has never opened the link online has nothing to work with offline. After a new deploy, open the link online once so the browser picks up the new version.
+- **Notes copy:** Local Storage holds about 5 MB per site, which is thousands of notes.
+- **HTTPS is required.** Browsers only allow service workers on HTTPS sites (or `localhost`). Railway and Hugging Face provide HTTPS. A VM served on plain `http://<ip>` needs a domain and a certificate first.
 
 ---
 
