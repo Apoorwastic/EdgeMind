@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from openai import AsyncOpenAI, AuthenticationError, PermissionDeniedError
+from openai import APIStatusError, AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
 from .network import NetworkGate
 
@@ -122,11 +122,14 @@ class LocalLLM:
 
 
 class CloudLLM:
-    def __init__(self, api_key: str | None, model: str, gate: NetworkGate):
+    def __init__(self, api_key: str | None, model: str, gate: NetworkGate,
+                 provider: str = "OpenAI", base_url: str | None = None):
         self.model = model
         self.gate = gate
-        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
-        self.rejected: str | None = None  # set once OpenAI refuses the key; .env is only read at boot
+        self.provider = provider
+        self.host = httpx.URL(base_url).host if base_url else "api.openai.com"
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url) if api_key else None
+        self.rejected: str | None = None  # set once the provider refuses the key; .env is only read at boot
 
     @property
     def configured(self) -> bool:
@@ -134,14 +137,18 @@ class CloudLLM:
 
     async def stream(self, messages: list[dict], mem_ids: list[str]) -> AsyncIterator[str]:
         size = sum(len(m["content"]) for m in messages)
-        self.gate.egress("api.openai.com", "cloud-generate", mem_ids, size)
+        self.gate.egress(self.host, "cloud-generate", mem_ids, size)
         try:
             resp = await self.client.chat.completions.create(
                 model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
             )
-        except (AuthenticationError, PermissionDeniedError) as e:
+        except APIStatusError as e:
             # A revoked or wrong key never starts working mid-run: stop paying a round trip per question.
-            self.rejected = f"OpenAI rejected the API key ({e.status_code})"
+            # Gemini reports a bad key as 400 "API key not valid" rather than 401.
+            bad_key = isinstance(e, (AuthenticationError, PermissionDeniedError)) or (
+                e.status_code == 400 and "api key" in str(e).lower())
+            if bad_key:
+                self.rejected = f"{self.provider} rejected the API key ({e.status_code})"
             raise
         async for chunk in resp:
             if chunk.choices and (t := chunk.choices[0].delta.content):

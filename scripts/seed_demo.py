@@ -33,11 +33,24 @@ SCENARIOS = {
             ("Trash and recycling go out every Tuesday night.", "shareable"),
             ("Bruno the dog eats 1 cup of food at 8 am and 6 pm — never give him chocolate or grapes.", "shareable"),
             ("The spare house key is with the neighbours in flat 4B.", "shareable"),
+            ("Car insurance with SafeDrive renews on 15 January; the policy number is SD-55210.", "private"),
+            ("Doctor Rao said to take one Vitamin D tablet every morning after breakfast.", "private"),
+            ("My gym locker combination is 2719.", "private"),
+            ("The electricity bill is due on the 5th of every month; pay it in the PowerGrid app.", "shareable"),
+            ("Emergency contacts: Dad on 555-0187, family doctor Dr. Rao on 555-0199.", "shareable"),
+            ("Movie night is every Friday at 8 pm, and it's Sam's turn to pick the film this week.", "shareable"),
+            ("The Wi-Fi router is in the hallway cupboard; restart it by holding the back button for 10 seconds.", "shareable"),
+            ("Water the balcony plants every Monday and Thursday; the cactus only needs water once a month.", "shareable"),
         ],
         "b": [
             ("Plumber Ravi fixed the kitchen sink — call him on 555-0142 if it leaks again.", "shareable"),
             ("Grandma's birthday is 3 November — she loves orchids.", "shareable"),
             ("Gift idea for Mom: the blue scarf from the Sunday market, about $25.", "private"),
+            ("Milk is delivered every day at 6:30 am; pause it in the DairyFresh app when we travel.", "shareable"),
+            ("The school bus picks the kids up at 7:45 am at the corner of Oak Street.", "shareable"),
+            ("Mom's favourite restaurant is Spice Garden; always book the window table.", "shareable"),
+            ("The library books are due back on 18 October.", "shareable"),
+            ("I'm saving for a new bike and want to buy it by March.", "private"),
         ],
     },
     "field": {
@@ -99,7 +112,10 @@ def main():
     notes = SCENARIOS[args.scenario]
     for c, key in ((A, "a"), (B, "b")):
         c.post("/api/network", json={"mode": "auto"})
+        have = {m["text"] for m in c.get("/api/memories").json()}  # re-running only adds what's missing
         for text, sensitivity in notes[key]:
+            if text in have:
+                continue
             c.post("/api/memories", json={"text": text, "sensitivity": sensitivity}).raise_for_status()
 
     ensure_team(TEAM_NAMES[args.scenario])
