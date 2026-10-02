@@ -255,7 +255,9 @@ export const api = {
   deleteMemory: (id) => req('DELETE', `api/memories/${id}`),
   supersede: (id, oldId) => req('POST', `api/memories/${id}/supersede/${oldId}`),
   search: (q) => req('POST', 'api/search', { q }),
-  chats: () => req('GET', 'api/chats'),
+  // The device's chats plus the ones this browser's own AI answered (offline, or private questions
+  // answered in the browser while online): those live only in this browser, so they're merged in here.
+  chats: async () => { await req('GET', 'api/chats'); return chatList() },
   // A chat can hold turns from both the device and this browser (asked while the device was unreachable).
   chat: async (cid) => {
     const turns = await req('GET', `api/chats/${cid}`)
