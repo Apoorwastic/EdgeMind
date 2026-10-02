@@ -95,7 +95,9 @@ def _installed(name: str, tags: list[str]) -> bool:
 class LocalLLM:
     def __init__(self, ollama_url: str, model: str, fallbacks: list[str] | None = None):
         self.url = ollama_url
-        self.preferred = [model, *(f for f in (fallbacks or []) if f and f != model)]
+        # LOCAL_LLM=none switches the on-device model off altogether (no fallback either): small cloud
+        # hosts can't run one, and trying only makes every answer wait.
+        self.preferred = [] if model == "none" else [model, *(f for f in (fallbacks or []) if f and f != model)]
         self.model = model
         self.available: bool | None = None
         # Set when the machine can't actually run the model (Ollama's runner was killed: out of memory).
@@ -110,7 +112,8 @@ class LocalLLM:
 
     async def check(self) -> bool:
         """Use the first preferred model that Ollama actually has installed."""
-        if time.time() < self.down_until:
+        if time.time() < self.down_until or not self.preferred:
+            self.available = False
             return False
         try:
             async with http_client(timeout=2) as c:

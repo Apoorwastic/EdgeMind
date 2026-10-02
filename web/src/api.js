@@ -288,15 +288,27 @@ export const api = {
   // Aborting `signal` (the Stop button) closes the stream; the device stops generating and keeps the partial answer.
   // If the device can't be reached, the question is answered in this browser with the same events.
   async ask(q, cid, onEvent, signal) {
-    // The device is up but can't write answers (e.g. a small server whose model gets killed for lack of
-    // memory, and no cloud key): if this browser has the offline AI, let it write the answer instead.
+    // The device is up but has no on-device model (e.g. a small cloud server). It can then answer only
+    // from the cloud model, which never sees Private or This-device notes. If this browser has its own
+    // AI, it writes the answer instead: always when the server has no model at all, and whenever the
+    // question touches your personal notes, so they're answered on YOUR device, not just listed.
     const models = local.cache.get('api/state')?.models
-    if (!browserMode && models && !models.local_llm && !models.cloud_llm && aiStatus().ready) {
-      try {
-        return await askInBrowser(q, cid, onEvent, signal, { memories: local.mirrorMemories(), history: chatTurns(cid),
-          why: 'the server has no AI model running · answered in this browser' })
-      } finally {
-        chatListeners.forEach((fn) => fn())
+    if (!browserMode && models && !models.local_llm && aiStatus().ready) {
+      const memories = local.mirrorMemories()
+      let why = null
+      if (!models.cloud_llm) why = 'the server has no AI model running · answered in this browser'
+      else {
+        const { hits } = await searchInBrowser(q, memories).catch(() => ({ hits: [] }))
+        if (hits.some((h) => h.relevant && h.sensitivity !== 'shareable')) {
+          why = 'your private notes matched, and only an AI on your own device may read them · answered in this browser'
+        }
+      }
+      if (why) {
+        try {
+          return await askInBrowser(q, cid, onEvent, signal, { memories, history: chatTurns(cid), why })
+        } finally {
+          chatListeners.forEach((fn) => fn())
+        }
       }
     }
     let r

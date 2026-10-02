@@ -189,6 +189,10 @@ async def main() -> None:
         loop.slow_callback_duration = 0.1
     data_root = Path(os.getenv("EDGEMIND_DATA") or config_mod._default_data_root())
     devices = wanted_devices()
+    # Many devices on a small server: sync each one every 20 s rather than 8 (a note change still syncs
+    # within ~1.5 s, edge/sync.py `soon`), so background syncing doesn't crowd out answering questions.
+    if len(devices) > 2:
+        os.environ.setdefault("SYNC_EVERY", "20")
     apps = {}
     for d in devices:
         apps[d["id"]] = load_device(d, data_root)

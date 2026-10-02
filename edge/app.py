@@ -500,6 +500,7 @@ async def add_memory(body: NewMemory):
     if body.supersedes:
         set_links(rec["mem_id"], body.supersedes)
     bus.emit("memory", None)
+    syncer.soon()
     return {"memory": public(store.get(rec["mem_id"])), "related": [public(h) for h in near]}
 
 
@@ -552,6 +553,7 @@ async def edit_memory(mem_id: str, body: EditMemory):
     else:
         store.set_fields(mem_id, fields)
     bus.emit("memory", None)
+    syncer.soon()
     return public(store.get(mem_id))
 
 
@@ -567,6 +569,7 @@ async def delete_memory(mem_id: str):
     store.delete(mem_id)
     bus.activity("memory", f"Deleted {mem_id} from device", mem_id=mem_id)
     bus.emit("memory", None)
+    syncer.soon()
     return {"ok": True}
 
 
@@ -601,6 +604,12 @@ NOT_FOUND = re.compile(
 def newest_first(notes: list[dict]) -> list[dict]:
     """The prompt lists memories newest first, so the model can prefer the newer of two conflicting notes."""
     return sorted(notes, key=lambda h: h["ts"], reverse=True)
+
+
+def notes_answer(context: list[dict]) -> str:
+    """No model may write the answer here (e.g. Private notes on a server without an on-device model):
+    give the one note that answers it best. The other matches stay listed under "Based on"."""
+    return f"From your notes: {context[0]['text']}"
 
 
 def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
@@ -805,8 +814,7 @@ async def ask(body: AskBody, request: Request):
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r3} model error: {type(e).__name__}"}) + "\n"
 
             if final_route == "retrieval":
-                answer = ("No generator available, so here is what your local memory says, verbatim:\n"
-                          + "\n".join(f"• {h['text']}" for h in context[:4])) if context else \
+                answer = notes_answer(context) if context else \
                          (f"No note matches that, and the on-device model {local_llm.model} couldn't answer. {local_err}"
                           if local_err else
                           "No note matches that, and no AI model could answer right now "

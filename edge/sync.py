@@ -31,6 +31,8 @@ Conflict policy — last-write-wins, with nothing silently lost:
 """
 import asyncio
 import json
+import os
+import random
 import time
 from pathlib import Path
 
@@ -88,6 +90,11 @@ class SyncState:
         self.save()
 
 
+# Every SyncManager in this process (edge/host.py runs many devices in one). After one pushes a change,
+# the others pull straight away instead of at their next periodic sync.
+_PEERS: list["SyncManager"] = []
+
+
 class SyncManager:
     def __init__(self, device_id: str, store: LocalMemory, cloud: CloudStore, embedder: Embedder,
                  gate: NetworkGate, bus: EventBus, state: SyncState, team=None, on_removed=None,
@@ -104,6 +111,9 @@ class SyncManager:
         self.state = state
         self.lock = asyncio.Lock()
         self.running = False
+        self._soon: asyncio.Task | None = None
+        _PEERS.append(self)
+        self._teams_checked = 0.0  # last team heartbeat (monotonic)
 
     # ---- bookkeeping called by local edits --------------------------------
 
@@ -145,10 +155,16 @@ class SyncManager:
                 self.cloud.revalidate()  # the server may have been reset or replaced since the last run
                 teams: list[dict] = []
                 if self.team is not None:
-                    teams, removed_ids = await self.team.refresh_all()
-                    for team_id in removed_ids:
-                        if self.on_removed:
-                            self.on_removed(team_id)
+                    # The heartbeat (last seen, renames, removals) writes to the shared server: once a
+                    # minute is plenty, except when something just changed.
+                    if reason in ("manual", "team", "reconnect", "unlock") or time.monotonic() - self._teams_checked > 60:
+                        teams, removed_ids = await self.team.refresh_all()
+                        self._teams_checked = time.monotonic()
+                        for team_id in removed_ids:
+                            if self.on_removed:
+                                self.on_removed(team_id)
+                    else:
+                        teams = self.team.teams
                 for team in teams:
                     team_id = team["id"]
                     async with self.cloud.for_team(self.team.collection(team_id)):
@@ -165,6 +181,10 @@ class SyncManager:
                         self.bus.activity("sync", "Private notes wait on this device until you sign in here (the vault key comes from your password).",
                                           level="muted")
                 self.state["last_sync"] = now_ms()
+                if reason != "peer" and any(summary[k] for k in ("pushed", "sealed", "retracted")):
+                    for peer in _PEERS:
+                        if peer is not self:
+                            peer.soon(0.3, reason="peer")
                 changed = any(summary[k] for k in ("pushed", "pulled", "retracted", "removed", "requeued", "conflicts", "sealed", "unsealed"))
                 if changed or reason == "manual":
                     self.bus.activity(
@@ -404,9 +424,23 @@ class SyncManager:
                 self.store.set_fields(m, {"vault_synced": False, "rev": 0, "base_rev": 0})  # the vault lost it: send again
                 summary["requeued"] += 1
 
-    async def loop(self, every: float = 8.0) -> None:
-        """Background: sync whenever online. Keeps devices converging without clicks."""
+    def soon(self, delay: float = 1.5, reason: str = "change") -> None:
+        """A note just changed: sync shortly (one run for a burst of changes), not at the next tick."""
+        if self._soon and not self._soon.done():
+            return
+
+        async def later():
+            await asyncio.sleep(delay)
+            if self.gate.online:
+                await self.sync(reason=reason)
+        self._soon = asyncio.create_task(later())
+
+    async def loop(self, every: float | None = None) -> None:
+        """Background: sync whenever online, to pick up other devices' changes. SYNC_EVERY seconds apart
+        (edge/host.py raises it when many devices share a process), each device at its own offset."""
+        every = every or float(os.getenv("SYNC_EVERY", "8"))
+        await asyncio.sleep(random.uniform(0, every))
         while True:
-            await asyncio.sleep(every)
             if self.gate.online and not self.lock.locked():
                 await self.sync(reason="periodic")
+            await asyncio.sleep(every)
