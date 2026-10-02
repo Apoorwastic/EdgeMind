@@ -334,10 +334,13 @@ async def local_search(q: str, limit: int = 6) -> tuple[list[dict], dict]:
         hit = {**rec, "semantic": 1.0, "keyword": 1.0, "relevant": True, "match": "all words"}
         return [hit], {**timing, "embed_ms": 0.0, "search_ms": round((time.perf_counter() - t0) * 1000, 2), "fast": True}
 
+    # "project" when the notes say "projector": search for both (never swap a real word, see vocab.expand).
+    extra = vocab.expand(query)
+    wide = f"{query} {' '.join(extra)}" if extra else query
     t1 = time.perf_counter()
-    dense, emb_name = await embedder.dense(query, kind="query")
+    dense, emb_name = await embedder.dense(wide, kind="query")
     t2 = time.perf_counter()
-    hits = store.search(dense, embedder.sparse_query(query), limit=limit)
+    hits = store.search(dense, embedder.sparse_query(wide), limit=limit)
     t3 = time.perf_counter()
     # A meaning score only counts when the note's vector came from the same model as the question's.
     # Notes embedded while the model was down ("hash-fallback"), pulled with another device's vector
@@ -353,14 +356,14 @@ async def local_search(q: str, limit: int = 6) -> tuple[list[dict], dict]:
             # and "How do I change a car tyre?" (not one): only shared words tell them apart. Notes near a
             # strong top match ride along, e.g. the router note for "How do I reset the internet box?".
             h["relevant"] = (h["semantic"] >= MIN_SEMANTIC and h["semantic"] >= top - BAND
-                             and (top >= STRONG or vocab.covers(query, h["mem_id"], share=0.3)))
+                             and (top >= STRONG or vocab.covers(wide, h["mem_id"], share=0.3)))
         else:
-            h["relevant"] = h["keyword"] > 0 and h["keyword"] >= 0.5 * kw_top and vocab.covers(query, h["mem_id"])
+            h["relevant"] = h["keyword"] > 0 and h["keyword"] >= 0.5 * kw_top and vocab.covers(wide, h["mem_id"])
     # Clear winner: nothing cleared the bar, but one note stands well above the rest and shares words with
     # the question ("Who is the plumbre?" → the plumber note at 0.56 vs 0.43 for the next).
     if same and not any(h["relevant"] for h in hits):
         second = same[1]["semantic"] if len(same) > 1 else 0
-        if top >= CLEAR_MIN and top - second >= CLEAR_GAP and vocab.covers(query, same[0]["mem_id"], share=0.3):
+        if top >= CLEAR_MIN and top - second >= CLEAR_GAP and vocab.covers(wide, same[0]["mem_id"], share=0.3):
             same[0]["relevant"] = True
             same[0]["match"] = "clear winner"
     return hits, {**timing, "embed_ms": round((t2 - t1) * 1000, 1), "search_ms": round((t3 - t2 + t1 - t0) * 1000, 2)}

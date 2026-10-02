@@ -158,6 +158,21 @@ class Vocabulary:
         fixed = re.sub(r"[A-Za-z0-9'’-]+", lambda m: fixes.get(words(m.group())[0] if words(m.group()) else "", m.group()), question)
         return fixed, fixes
 
+    def expand(self, question: str) -> list[str]:
+        """Note words to search for alongside a real word that's a longer or shorter form of them: "project"
+        also searches "projector" (the user meant the projector note). Never replaces the word, so "full
+        form" stays "full form" in what the model reads; it only widens the search."""
+        extra = set()
+        real = real_words()
+        for w in set(words(question)):
+            if len(w) < 4 or w in STOP or w in self.counts or stem(w) in self.stems or w not in real:
+                continue
+            for cand in self.counts:
+                if (cand not in STOP and cand not in PRONOUNS and 0 < abs(len(cand) - len(w)) <= 3
+                        and (cand.startswith(w) or w.startswith(cand)) and min(len(w), len(cand)) >= 4):
+                    extra.add(cand)
+        return sorted(extra)
+
     def covers(self, question: str, mem_id: str, share: float = 0.6) -> bool:
         """Does the note contain at least `share` of the question's meaningful words (trigram near-misses count)?"""
         want = terms(question)
