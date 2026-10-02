@@ -176,16 +176,18 @@ const TABS = [
 
 export default function MobileApp({
   route, go, state, memories, cloud, conflicts, egress, activity, audit, particles, syncing, chats, transition,
-  onToggleNetwork, onChanged, onRestore, onAudit, onDeleteChat, onPrefs,
+  teamId, onSelectTeam, onToggleNetwork, onChanged, onRestore, onAudit, onDeleteChat, onPrefs,
 }) {
   const [sheet, setSheet] = useState(false)
   const online = state.network.online
+  const teams = state.teams || []
   const page = ['notes', 'team', 'sync', 'admin'].includes(route[0]) ? route[0] : 'ask'
   const chatId = page === 'ask' && route[0] === 'chat' ? route[1] : null
   const openConflicts = conflicts.filter((c) => !c.resolved).length
   const badges = { sync: state.sync.pending + openConflicts || null, team: null, notes: null, ask: null,
     admin: openConflicts || (audit && !audit.ok ? '!' : null) }
-  const title = { ask: chatId ? (chats.find((c) => c.id === chatId)?.title || 'Chat') : 'EdgeMind', notes: 'My notes', team: state.team?.name || 'Team', sync: 'Sync & privacy', admin: 'Admin' }[page]
+  const title = { ask: chatId ? (chats.find((c) => c.id === chatId)?.title || 'Chat') : 'EdgeMind', notes: 'My notes',
+    team: teams.length === 1 ? teams[0].name : 'Team', sync: 'Sync & privacy', admin: 'Admin' }[page]
 
   return (
     <div className={`m-stage ${online ? 'is-online' : 'is-offline'}`}>
@@ -219,7 +221,7 @@ export default function MobileApp({
               cid={chatId} onChatStarted={(cid) => go(`chat/${cid}`)} rail={false} />
           )}
           {page === 'notes' && <NotesView memories={memories} state={state} onChanged={onChanged} />}
-          {page === 'team' && <TeamView cloud={cloud} state={state} />}
+          {page === 'team' && <TeamView cloud={cloud} state={state} memories={memories} onSelectTeam={onSelectTeam} />}
           {page === 'sync' && (
             <SyncTab state={state} audit={audit} conflicts={conflicts} activity={activity} particles={particles}
               syncing={syncing} onToggleNetwork={onToggleNetwork} onRestore={onRestore} onAudit={onAudit} />
@@ -227,6 +229,7 @@ export default function MobileApp({
           {page === 'admin' && (
             // The laptop's Admin, section for section; mobile.css fits it to the phone.
             <AdminView tab={route[1] || 'overview'} go={go} state={state} memories={memories} cloud={cloud}
+              teamId={teamId} onSelectTeam={onSelectTeam}
               conflicts={conflicts} egress={egress} activity={activity} audit={audit} particles={particles}
               syncing={syncing} onAudit={onAudit} onToggleNetwork={onToggleNetwork} onPrefs={onPrefs}
               onRestore={onRestore} />

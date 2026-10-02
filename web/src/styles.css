@@ -479,6 +479,79 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .team-note, .team-error { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); }
 .team-error { color: var(--bad); }
 
+.team-picker { display: flex; flex-direction: column; gap: 8px; animation: rise 0.2s ease both; align-self: flex-start; min-width: 220px; }
+
+.team-picker-summary {
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 999px;
+  background: var(--shared-soft); border: 1px solid rgba(94, 230, 160, 0.3); color: var(--shared); font-size: 13.5px;
+  transition: all 0.15s;
+}
+.team-picker-summary:hover { border-color: rgba(94, 230, 160, 0.5); background: rgba(94, 230, 160, 0.17); }
+.team-picker-summary b { color: var(--shared); font-weight: 600; }
+.team-picker-summary span { display: inline-flex; align-items: center; gap: 4px; }
+.team-picker-caret { margin-left: 2px; color: var(--text-3); transition: transform 0.15s; }
+.team-picker-caret.open { transform: rotate(180deg); }
+
+.team-picker-panel {
+  display: flex; flex-direction: column; gap: 3px; padding: 6px; border-radius: var(--r-sm);
+  background: var(--glass-2); border: 1px solid var(--line-2); min-width: 240px;
+}
+.team-picker-filter {
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 9px; margin-bottom: 2px;
+  border-radius: 8px; background: rgba(0, 0, 0, 0.25); color: var(--text-3);
+}
+.team-picker-filter input { flex: 1; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 13.5px; }
+.team-picker-filter input::placeholder { color: var(--text-3); }
+/* Capped and scrollable, not just display:flex-and-grow — a few dozen teams stay a few dozen
+   pixels tall instead of pushing the rest of the page down the longer the list gets. */
+.team-picker-rows { display: flex; flex-direction: column; gap: 3px; max-height: 252px; overflow-y: auto; }
+.team-picker-empty { padding: 14px 8px; font-size: 13px; color: var(--text-3); text-align: center; }
+.team-picker-row {
+  display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 10px; border-radius: 9px;
+  color: var(--text); font-size: 14px; text-align: left; transition: background 0.12s; flex: none;
+}
+.team-picker-row:hover { background: var(--glass-3); }
+.team-picker-row span { flex: 1; }
+.team-picker-row.active { background: var(--shared-soft); color: var(--shared); font-weight: 500; }
+.team-picker-row.active svg { color: var(--shared); }
+.team-picker-row.new { color: var(--text-2); border-top: 1px solid var(--line); margin-top: 3px; padding-top: 10px; border-radius: 0 0 8px 8px; }
+.team-picker-row.new:hover { color: var(--text); }
+
+.team-picker-add { padding: 8px 6px 2px; border-top: 1px solid var(--line); margin-top: 3px; display: flex; flex-direction: column; gap: 8px; }
+.team-picker-add-tabs { align-self: flex-start; }
+.team-picker-create { display: flex; flex-direction: column; gap: 8px; padding: 0; }
+.team-picker-create input {
+  height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-2);
+  background: rgba(0, 0, 0, 0.3); outline: 0; font-size: 14px; flex: 1;
+}
+.team-picker-create input:focus { border-color: rgba(255, 122, 47, 0.5); }
+.team-picker-hint { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--waiting); margin: 0; }
+.badge.warn { background: var(--bad-soft); color: var(--bad); }
+.team-switch-inline { margin-bottom: 14px; }
+.note-team-pick { padding: 10px 14px 14px; }
+
+.team-grid-wrap { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+.team-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.team-grid-card {
+  display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: var(--r);
+  background: var(--glass); border: 1px solid var(--line); backdrop-filter: var(--blur);
+  text-align: left; transition: all 0.15s;
+}
+.team-grid-card:hover { border-color: var(--line-2); background: var(--glass-2); }
+.team-grid-card .team-avatar { width: 40px; height: 40px; border-radius: 12px; }
+.team-grid-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.team-grid-info b { font-size: 15px; }
+.team-grid-chevron { color: var(--text-3); transform: rotate(180deg); flex: none; }
+.team-add-btn { align-self: flex-start; }
+.team-back { align-self: flex-start; }
+.team-feed-section { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.team-feed-section .feed-title { margin: 0; }
+
+.team-leave-confirm { background: var(--bad-soft) !important; border-color: rgba(255, 107, 91, 0.3) !important; display: flex; flex-direction: column; gap: 12px; }
+.team-leave-confirm p { margin: 0; font-size: 13.5px; }
+.team-leave-confirm b { color: var(--bad); }
+.team-leave-choice { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
 .team-panel > section { padding: 16px 18px; border-radius: var(--r); background: var(--glass); border: 1px solid var(--line); backdrop-filter: var(--blur); }
 .team-head { display: flex; align-items: center; gap: 14px; }
 .team-avatar { width: 46px; height: 46px; flex: none; border-radius: 14px; display: grid; place-items: center; background: var(--shared-soft); color: var(--shared); box-shadow: 0 0 24px -8px var(--shared); }

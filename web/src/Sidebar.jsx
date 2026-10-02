@@ -32,10 +32,12 @@ export default function Sidebar({ state, page, memories, cloud, audit, alerts, s
   const { device, network, sync, memory } = state
   const online = network.online
   const notes = memories.filter((m) => !m.superseded_by).length
+  const teams = state.teams || []
 
   const NAV = [
     ['notes', 'My notes', 'notes', notes],
-    ['team', state.team ? 'Team' : 'Join a team', 'users', state.team ? (state.team.members?.length || null) : null],
+    ['team', teams.length === 0 ? 'Join a team' : teams.length === 1 ? 'Team' : 'Teams', 'users',
+      teams.length === 1 ? (teams[0].members?.length || null) : teams.length > 1 ? teams.length : null],
     ['admin', 'Admin', 'gear', alerts || null],
   ]
 

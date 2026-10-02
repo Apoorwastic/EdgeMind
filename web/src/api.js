@@ -106,7 +106,7 @@ async function flushOutbox() {
     for (let ops = local.outbox.all(); ops.length; ops = local.outbox.all()) {
       const o = ops[0]
       try {
-        if (o.op === 'add') await direct('POST', 'api/memories', { text: o.text, sensitivity: o.sensitivity })
+        if (o.op === 'add') await direct('POST', 'api/memories', { text: o.text, sensitivity: o.sensitivity, team_id: o.teamId ?? null })
         else if (o.op === 'edit') await direct('PATCH', `api/memories/${o.id}`, o.patch)
         else await direct('DELETE', `api/memories/${o.id}`)
       } catch (e) {
@@ -174,15 +174,17 @@ async function offline(method, path, body) {
     if (path === 'api/chats') return chatList()
     if (a === 'chats' && b) return chatTurns(b)
     if (path === 'api/activity') return [...(local.cache.get(path) || []), ...local.browserActivity()].sort((x, y) => x.ts - y.ts)
+    const isCloud = path.startsWith('api/cloud')
     const cached = local.cache.get(path)
-    if (cached !== undefined) return path === 'api/cloud' ? { ...cached, live: false } : cached
-    return { 'api/cloud': { live: false, records: [], as_of: null }, 'api/conflicts': [], 'api/egress': [], 'api/team': { team: null } }[path] ?? null
+    if (cached !== undefined) return isCloud ? { ...cached, live: false } : cached
+    if (isCloud) return { live: false, records: [], as_of: null }
+    return { 'api/conflicts': [], 'api/egress': [], 'api/team': { teams: [] } }[path] ?? null
   }
   const device = local.cache.get('api/state')?.device
   switch (key) {
     case 'POST memories':
       if (b) throw new Error(NOT_OFFLINE) // supersede
-      return { memory: local.queueAdd(body.text, body.sensitivity, device), related: [] }
+      return { memory: local.queueAdd(body.text, body.sensitivity, device, body.team_id), related: [] }
     case 'PATCH memories': {
       const m = local.mirrorMemories().find((x) => x.mem_id === b)
       if (!m) throw new Error('not found')
@@ -209,7 +211,7 @@ async function offline(method, path, body) {
 export const api = {
   state: () => req('GET', 'api/state'),
   memories: () => req('GET', 'api/memories'),
-  addMemory: (text, sensitivity, supersedes) => req('POST', 'api/memories', { text, sensitivity, supersedes }),
+  addMemory: (text, sensitivity, supersedes, teamId) => req('POST', 'api/memories', { text, sensitivity, supersedes, team_id: teamId ?? null }),
   editMemory: (id, patch) => req('PATCH', `api/memories/${id}`, patch),
   deleteMemory: (id) => req('DELETE', `api/memories/${id}`),
   supersede: (id, oldId) => req('POST', `api/memories/${id}/supersede/${oldId}`),
@@ -230,7 +232,7 @@ export const api = {
       throw e
     }
   },
-  cloud: () => req('GET', 'api/cloud'),
+  cloud: (teamId) => req('GET', `api/cloud?team_id=${encodeURIComponent(teamId)}`),
   conflicts: () => req('GET', 'api/conflicts'),
   restore: (cid) => req('POST', `api/conflicts/${cid}/restore`),
   activity: () => req('GET', 'api/activity'),
@@ -243,10 +245,10 @@ export const api = {
   team: () => req('GET', 'api/team'),
   createTeam: (name) => req('POST', 'api/team', { name }),
   joinTeam: (code) => req('POST', 'api/team/join', { code }),
-  leaveTeam: () => req('POST', 'api/team/leave'),
-  renameTeam: (name) => req('POST', 'api/team/rename', { name }),
-  newTeamCode: () => req('POST', 'api/team/code'),
-  removeMember: (deviceId) => req('DELETE', `api/team/members/${deviceId}`),
+  leaveTeam: (teamId, resolution) => req('POST', `api/team/${teamId}/leave${resolution ? `?resolution=${resolution}` : ''}`),
+  renameTeam: (teamId, name) => req('POST', `api/team/${teamId}/rename`, { name }),
+  newTeamCode: (teamId) => req('POST', `api/team/${teamId}/code`),
+  removeMember: (teamId, deviceId) => req('DELETE', `api/team/${teamId}/members/${deviceId}`),
 
   // Streams NDJSON events from /api/ask: chat → retrieval → token* → (reroute) → done.
   // cid continues a conversation; without it the device starts a new one and reports its id.

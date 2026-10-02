@@ -3,7 +3,7 @@
 // browser's built-in one when it has it (nothing to download), otherwise WebLLM on WebGPU, downloaded once
 // while online — automatically, sized to this device — and then loaded from the browser's cache.
 import { aiPrefs, chats, logActivity } from './local.js'
-import { Vocabulary, isPersonal, words } from './textsearch.js'
+import { Vocabulary, isFollowup, isPersonal, words } from './textsearch.js'
 
 // Same prompts as the device (edge/llm.py), so answers read the same online and offline.
 const SYSTEM =
@@ -708,7 +708,19 @@ const aborted = () => new DOMException('Stopped', 'AbortError')
 export async function ask(q, cid, onEvent, signal, { memories, history, why = 'device unreachable · answered in this browser' }) {
   cid ||= chats.newId()
   onEvent({ type: 'chat', cid })
-  const { hits, timing } = await search(q, memories)
+  let { hits, timing } = await search(q, memories)
+  // Follow-up ("When is grandma's birthday?" → "What does she like?"): search again together with the previous
+  // question — only when the question alone found no strong match (same rule as the device).
+  const prev = [...history].reverse().find((t) => t.role === 'user')
+  let followup = null
+  if (prev && isFollowup(q) && !timing.fast && !hits.some((h) => h.relevant && h.semantic >= EMBED.strong)) {
+    const second = await search(`${prev.text} ${q}`, memories)
+    if (second.hits.some((h) => h.relevant)) {
+      ;({ hits } = second)
+      timing = { ...second.timing, searched_for: timing.searched_for, followup_of: prev.text }
+      followup = prev
+    }
+  }
   const relevant = hits.filter((h) => h.relevant && !h.superseded_by) // best match first
   const general = !relevant.length
   let mode = general ? 'general' : 'memory'
@@ -742,7 +754,9 @@ export async function ask(q, cid, onEvent, signal, { memories, history, why = 'd
   }
 
   const generate = async (eng, notes, isGeneral = general) => {
-    const messages = buildMessages(timing.searched_for || q, notes, history, isGeneral, weak && !isGeneral) // spelling-corrected question
+    const asked = timing.searched_for || q // spelling-corrected question
+    const messages = buildMessages(followup ? `Earlier question: "${followup.text}"\nFollow-up question: ${asked}` : asked,
+      notes, history, isGeneral, weak && !isGeneral)
     const loose = isGeneral || weak // may be a longer general answer
     const show = (raw) => {
       const visible = raw.replace(/<think>[\s\S]*?(<\/think>\s*|$)/, '') // belt and braces: hide any thinking

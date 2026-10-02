@@ -42,6 +42,15 @@ export default function App() {
   const [state, setState] = useState(null)
   const [memories, setMemories] = useState([])
   const [cloud, setCloud] = useState({ live: false, records: [], as_of: null })
+  // Which team's shared-store view (Team page, Admin's "Shared store") is showing — defaults to
+  // the device's only team when there's just one, so that view stays exactly as before for the
+  // single-team case. A ref mirrors it so refreshCloud (stable across renders) always reads the
+  // latest pick without needing to be re-created every time the selection changes.
+  const [teamId, setTeamId] = useState(null)
+  const teams = state?.teams || []
+  const activeTeamId = teams.some((t) => t.id === teamId) ? teamId : teams[0]?.id ?? null
+  const teamIdRef = useRef(null)
+  teamIdRef.current = activeTeamId
   const [conflicts, setConflicts] = useState([])
   const [activity, setActivity] = useState([])
   const [egress, setEgress] = useState([])
@@ -64,7 +73,11 @@ export default function App() {
     }
   }, [])
   const refreshCloud = useCallback(async () => {
-    const [c, k, e] = await Promise.all([api.cloud(), api.conflicts(), api.egress()])
+    const tid = teamIdRef.current
+    const [c, k, e] = await Promise.all([
+      tid ? api.cloud(tid) : Promise.resolve({ live: false, records: [], as_of: null }),
+      api.conflicts(), api.egress(),
+    ])
     setCloud(c)
     setConflicts(k)
     setEgress(e)
@@ -111,6 +124,10 @@ export default function App() {
       clearInterval(auditPoll)
     }
   }, [refresh, refreshCloud, refreshAudit, refreshChats])
+
+  // Refetch the shared-store view whenever the selected team changes (including the first time
+  // `teams` loads and auto-picks one).
+  useEffect(() => { if (activeTeamId) refreshCloud().catch(() => {}) }, [activeTeamId, refreshCloud])
 
   // Device became unreachable (browser mode) or came back (queued notes were just replayed): reload everything.
   useEffect(() => link.onChats(refreshChats), [refreshChats])
@@ -170,6 +187,7 @@ export default function App() {
       <>{banner}<MobileApp route={route} go={go} state={state} memories={memories} cloud={cloud} conflicts={conflicts}
         activity={activity} audit={audit} particles={particles} syncing={syncing} chats={chats} transition={transition}
         egress={egress} onToggleNetwork={toggleNetwork} onChanged={refresh} onAudit={refreshAudit} onDeleteChat={deleteChat}
+        teamId={activeTeamId} onSelectTeam={setTeamId}
         onPrefs={async (v) => { await api.setPrefs(v); refresh() }}
         onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} /></>
     )
@@ -194,9 +212,12 @@ export default function App() {
         {page === 'notes' && (
           <NotesView memories={memories} state={state} onChanged={refresh} />
         )}
-        {page === 'team' && <TeamView cloud={cloud} state={state} />}
+        {page === 'team' && (
+          <TeamView cloud={cloud} state={state} memories={memories} onSelectTeam={setTeamId} />
+        )}
         {page === 'admin' && (
           <AdminView tab={route[1] || 'overview'} go={go} state={state} memories={memories} cloud={cloud}
+            teamId={activeTeamId} onSelectTeam={setTeamId}
             conflicts={conflicts} egress={egress} activity={activity} audit={audit} particles={particles}
             syncing={syncing} onAudit={refreshAudit} onToggleNetwork={toggleNetwork}
             onPrefs={async (v) => { await api.setPrefs(v); refresh() }}

@@ -1,24 +1,33 @@
 import { useState } from 'react'
 import { ago, api, deviceName } from './api.js'
 import { Icon } from './icons.jsx'
+import TeamPicker from './TeamPicker.jsx'
 
-function StatusBadge({ m }) {
+function StatusBadge({ m, teams }) {
   if (m.sensitivity === 'private') return <span className="badge private"><Icon name="lock" size={12} />Only me</span>
-  if (m.synced) return <span className="badge shared"><Icon name="users" size={12} />Team</span>
+  if (!m.team_id) return <span className="badge warn"><Icon name="warn" size={12} />Needs a team</span>
+  if (m.synced) {
+    const t = teams.find((x) => x.id === m.team_id)
+    return <span className="badge shared"><Icon name="users" size={12} />{t ? t.name : 'Team'}</span>
+  }
   return <span className="badge waiting"><Icon name="queued" size={12} />Waiting to sync</span>
 }
 
 // Plain-words answer to "where does this note live?"
-function whereItLives(m, device) {
+function whereItLives(m, device, teams) {
   if (m.sensitivity === 'private') return `Stored only on this ${device.name}. It never leaves this device.`
-  if (m.synced) return 'Shared with your team — copied to your other devices whenever they’re online.'
-  return 'Will be shared with your team as soon as this device is back online.'
+  if (!m.team_id) return 'It’s tagged Team, but needs a team picked before it can sync.'
+  const t = teams.find((x) => x.id === m.team_id)
+  const who = t ? t.name : 'your team'
+  if (m.synced) return `Shared with ${who} — copied to your other devices whenever they’re online.`
+  return `Will be shared with ${who} as soon as this device is back online.`
 }
 
-function NoteCard({ m, device, onChanged, old }) {
+function NoteCard({ m, device, teams, onChanged, old }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
+  const [pickingTeam, setPickingTeam] = useState(false)
   const [text, setText] = useState(m.text)
   const [err, setErr] = useState(null)
   const foreign = m.origin && m.origin !== device.id
@@ -29,6 +38,11 @@ function NoteCard({ m, device, onChanged, old }) {
     try { await fn(); onChanged() } catch (e) { setErr(e.message) }
   }
   const toggle = () => { if (!editing) { setOpen(!open); setConfirmDel(false) } }
+  const share = () => setPickingTeam(true)
+  const assignTeam = (teamId) => run(async () => {
+    await api.editMemory(m.mem_id, { sensitivity: 'shareable', team_id: teamId })
+    setPickingTeam(false)
+  })
 
   return (
     <li className={`note ${priv ? 'private' : 'shared'} ${old ? 'old' : ''} ${open ? 'open' : ''}`}>
@@ -49,7 +63,7 @@ function NoteCard({ m, device, onChanged, old }) {
 
         <div className="note-foot">
           <div className="note-tags">
-            <StatusBadge m={m} />
+            <StatusBadge m={m} teams={teams} />
             {foreign && <span className="badge neutral"><Icon name="arrowDown" size={12} />From {deviceName(m.origin)}</span>}
             {m.supersedes && !old && <span className="badge neutral"><Icon name="restore" size={12} />Updated</span>}
             {old && <span className="badge neutral">Older version</span>}
@@ -60,8 +74,8 @@ function NoteCard({ m, device, onChanged, old }) {
 
       {open && !editing && (
         <p className="note-where">
-          <Icon name={priv ? 'lock' : m.synced ? 'users' : 'queued'} size={13} />
-          <span>{whereItLives(m, device)} Last changed {new Date(m.updated_ts).toLocaleString()}.</span>
+          <Icon name={priv ? 'lock' : !m.team_id ? 'warn' : m.synced ? 'users' : 'queued'} size={13} />
+          <span>{whereItLives(m, device, teams)} Last changed {new Date(m.updated_ts).toLocaleString()}.</span>
         </p>
       )}
 
@@ -77,9 +91,15 @@ function NoteCard({ m, device, onChanged, old }) {
         ) : (
           <div className="note-actions">
             {!(foreign && !priv) && (
-              <button className="btn ghost small" onClick={() => run(() => api.editMemory(m.mem_id, { sensitivity: priv ? 'shareable' : 'private' }))}
+              <button className="btn ghost small"
+                onClick={() => (priv ? share() : run(() => api.editMemory(m.mem_id, { sensitivity: 'private' })))}
                 title={priv ? 'Share with your other devices' : 'Make private — removes it from the shared store'}>
                 <Icon name={priv ? 'users' : 'lock'} size={14} /> {priv ? 'Share' : 'Make private'}
+              </button>
+            )}
+            {!priv && !m.team_id && (
+              <button className="btn ghost small" onClick={() => setPickingTeam(true)}>
+                <Icon name="users" size={14} /> Pick a team
               </button>
             )}
             <button className="btn ghost small" onClick={() => { setText(m.text); setEditing(true) }}>
@@ -91,19 +111,32 @@ function NoteCard({ m, device, onChanged, old }) {
           </div>
         )
       )}
+
+      {open && pickingTeam && (
+        <div className="note-team-pick">
+          <TeamPicker teams={teams} value={null} onPick={assignTeam} onAdded={assignTeam} />
+        </div>
+      )}
     </li>
   )
 }
 
-function NewNote({ onSaved, onCancel }) {
+function NewNote({ onSaved, onCancel, teams }) {
   const [text, setText] = useState('')
   const [sensitivity, setSensitivity] = useState('private')
+  const [teamId, setTeamId] = useState(teams.length === 1 ? teams[0].id : null)
   const [busy, setBusy] = useState(false)
+  const needsTeamPick = sensitivity === 'shareable' && teams.length > 1 && !teamId
+  const pickTeam = (v) => {
+    setSensitivity(v)
+    if (v === 'shareable' && teams.length === 1) setTeamId(teams[0].id)
+    else if (v === 'private') setTeamId(null)
+  }
   const save = async (e) => {
     e.preventDefault()
-    if (!text.trim()) return
+    if (!text.trim() || needsTeamPick) return
     setBusy(true)
-    try { await api.addMemory(text.trim(), sensitivity); onSaved() } finally { setBusy(false) }
+    try { await api.addMemory(text.trim(), sensitivity, undefined, teamId); onSaved() } finally { setBusy(false) }
   }
   return (
     <form className="new-note card" onSubmit={save}>
@@ -111,20 +144,21 @@ function NewNote({ onSaved, onCancel }) {
         placeholder="What do you want to remember?" />
       <div className="new-note-bar">
         <div className="seg" role="radiogroup" aria-label="Who can see this note">
-          <button type="button" className={sensitivity === 'private' ? 'active private' : ''} onClick={() => setSensitivity('private')}>
+          <button type="button" className={sensitivity === 'private' ? 'active private' : ''} onClick={() => pickTeam('private')}>
             <Icon name="lock" size={14} /> Only me
           </button>
-          <button type="button" className={sensitivity === 'shareable' ? 'active shared' : ''} onClick={() => setSensitivity('shareable')}>
+          <button type="button" className={sensitivity === 'shareable' ? 'active shared' : ''} onClick={() => pickTeam('shareable')}>
             <Icon name="users" size={14} /> Team
           </button>
         </div>
         <div className="row gap">
           <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={busy || !text.trim()}>
+          <button type="submit" className="btn primary" disabled={busy || !text.trim() || needsTeamPick}>
             <Icon name="check" size={15} /> Save note
           </button>
         </div>
       </div>
+      {sensitivity === 'shareable' && <TeamPicker teams={teams} value={teamId} onPick={setTeamId} onAdded={setTeamId} />}
     </form>
   )
 }
@@ -136,6 +170,7 @@ export default function NotesView({ memories, state, onChanged }) {
   const [adding, setAdding] = useState(false)
   const [showOld, setShowOld] = useState(false)
   const device = state.device
+  const teams = state.teams || []
 
   const current = memories.filter((m) => !m.superseded_by)
   const older = memories.filter((m) => m.superseded_by)
@@ -176,7 +211,7 @@ export default function NotesView({ memories, state, onChanged }) {
         )}
       </div>
 
-      {adding && <NewNote onSaved={() => { setAdding(false); onChanged() }} onCancel={() => setAdding(false)} />}
+      {adding && <NewNote teams={teams} onSaved={() => { setAdding(false); onChanged() }} onCancel={() => setAdding(false)} />}
 
       <form className="search" onSubmit={search}>
         <Icon name="search" size={18} />
@@ -212,7 +247,7 @@ export default function NotesView({ memories, state, onChanged }) {
         </div>
       ) : (
         <ul className="note-grid">
-          {shown.map((m) => <NoteCard key={m.mem_id} m={m} device={device} onChanged={onChanged} old={!!m.superseded_by} />)}
+          {shown.map((m) => <NoteCard key={m.mem_id} m={m} device={device} teams={teams} onChanged={onChanged} old={!!m.superseded_by} />)}
         </ul>
       )}
 
@@ -223,7 +258,7 @@ export default function NotesView({ memories, state, onChanged }) {
           </button>
           {showOld && (
             <ul className="note-grid">
-              {older.map((m) => <NoteCard key={m.mem_id} m={m} device={device} onChanged={onChanged} old />)}
+              {older.map((m) => <NoteCard key={m.mem_id} m={m} device={device} teams={teams} onChanged={onChanged} old />)}
             </ul>
           )}
         </div>

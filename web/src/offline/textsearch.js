@@ -9,6 +9,13 @@ const STOP = new Set(('a an the is are was were be been am i me my mine you your
   'this that these those there here from about as into than then so if any some all tell give please thanks much many ' +
   'get got have has had s t').split(' '))
 
+// Might lean on the previous question: "What does she like?", "And the Wi-Fi password?", "His number?".
+// Only a hint: callers still check that the question alone doesn't already find a strong answer.
+export const isFollowup = (q) =>
+  /\b(he|she|him|her|his|hers|it|its|they|them|their|theirs|that|this|those|these|there|same|one)\b/i.test(q) ||
+  /^\s*(and|also|what about|how about|what else|then|so|but)\b/i.test(q) ||
+  words(q).filter((w) => !STOP.has(w)).length <= 1
+
 // Asks about the user's own things ("my", "our"): only their notes can answer, never general knowledge.
 // "I"/"me" don't count: "How do I change a tyre?" is a general question.
 export const isPersonal = (q) => /\b(my|our|mine|ours)\b/i.test(q)

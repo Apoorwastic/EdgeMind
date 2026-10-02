@@ -36,13 +36,13 @@ export const outbox = {
 
 const tmpId = (p) => `${p}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
 
-export function queueAdd(text, sensitivity, device) {
+export function queueAdd(text, sensitivity, device, teamId = null) {
   const now = Date.now()
   const rec = {
-    mem_id: tmpId('b'), text, sensitivity, role: 'user', origin: device?.id, updated_by: device?.id,
+    mem_id: tmpId('b'), text, sensitivity, team_id: teamId, role: 'user', origin: device?.id, updated_by: device?.id,
     synced: false, ts: now, updated_ts: now, rev: 0, base_rev: 0, offline: true,
   }
-  outbox.set([...outbox.all(), { op: 'add', id: rec.mem_id, text, sensitivity, ts: now }])
+  outbox.set([...outbox.all(), { op: 'add', id: rec.mem_id, text, sensitivity, teamId, ts: now }])
   return rec
 }
 
@@ -67,7 +67,7 @@ export function mirrorMemories() {
   let list = (cache.get('api/memories') || []).map((m) => ({ ...m }))
   for (const o of outbox.all()) {
     if (o.op === 'add') {
-      list.push({ mem_id: o.id, text: o.text, sensitivity: o.sensitivity, role: 'user', origin: read('device', {}).id,
+      list.push({ mem_id: o.id, text: o.text, sensitivity: o.sensitivity, team_id: o.teamId ?? null, role: 'user', origin: read('device', {}).id,
         synced: false, ts: o.ts, updated_ts: o.ts, rev: 0, base_rev: 0, offline: true })
     } else if (o.op === 'edit') {
       const m = list.find((x) => x.mem_id === o.id)
