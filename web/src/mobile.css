@@ -184,7 +184,7 @@
 
 /* ---------------------------------------------------------------- bottom tabs */
 .m-tabs {
-  flex: none; display: grid; grid-template-columns: repeat(4, 1fr);
+  flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);  /* one row, however many tabs */
   padding: 6px 8px calc(10px + env(safe-area-inset-bottom, 0px));
   background: rgba(10, 10, 12, 0.82); backdrop-filter: var(--blur); border-top: 1px solid var(--line);
 }
@@ -236,6 +236,38 @@
 .m-chat-time { font-size: 12px; color: var(--text-3); }
 @keyframes sheet { from { transform: translateY(100%); } }
 @keyframes fade { from { opacity: 0; } }
+
+/* ---------------------------------------------------------------- admin (the laptop's Admin, fitted to the phone)
+   Scoped to .m-body rather than a media query: inside the desktop demo frame the window is wide. */
+.m-body .admin { max-width: none; margin: 0; padding: 14px 12px 28px; gap: 14px; }
+.m-body .page-head h1 { font-size: 22px; }
+.m-body .admin-tabs { margin: 0 -12px; padding: 0 6px; scrollbar-width: none; }
+.m-body .admin-tabs::-webkit-scrollbar { display: none; }
+.m-body .admin-tabs button { height: 38px; padding: 0 10px; font-size: 13px; gap: 6px; }
+.m-body .admin-body { gap: 12px; }
+.m-body .panel { padding: 14px; gap: 12px; }
+/* minmax(0, 1fr): long one-line details (model names) truncate instead of widening the column */
+.m-body .stat-grid, .m-body .health-grid, .m-body .kv-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.m-body .stat-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }  /* five stats: 3 on top, 2 below */
+.m-body .stat-grid > .stat { grid-column: span 2; }
+.m-body .stat-grid > .stat:nth-child(n + 4) { grid-column: span 3; }
+.m-body .health, .m-body .stat { min-width: 0; }
+.m-body .kv-grid { gap: 1px; }
+.m-body .stat { padding: 10px 12px; }
+.m-body .stat b { font-size: 24px; margin-top: 6px; }
+.m-body .health { padding: 10px 11px; gap: 9px; }
+.m-body .channel { gap: 10px; }
+.m-body .channel-end { width: 64px; }
+.m-body .channel-end .icon { width: 40px; height: 40px; padding: 10px; }
+.m-body .setting, .m-body .audit-card { flex-direction: column; align-items: stretch; gap: 12px; }
+.m-body .versions { grid-template-columns: 1fr; }
+.m-body .table-wrap { margin: 0 -14px -14px; }
+.m-body .table { font-size: 13px; }
+.m-body .table th { padding: 8px 12px; }
+.m-body .table td { padding: 10px 12px; }
+.m-body .table .t-text { max-width: 220px; }
+.m-body .log { margin: 0 -14px -14px; max-height: none; font-size: 11.5px; }
+.m-body .log li { grid-template-columns: 58px 54px 1fr; gap: 8px; padding: 5px 12px; }
 
 /* ---------------------------------------------------------------- real phones: full-screen, no frame */
 @media (max-width: 520px) {

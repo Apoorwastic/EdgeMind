@@ -5,6 +5,7 @@ import AskView from './AskView.jsx'
 import NotesView from './NotesView.jsx'
 import TeamView from './TeamView.jsx'
 import OfflineAI from './OfflineAI.jsx'
+import AdminView from './AdminView.jsx'
 
 // Mobile device UI: a phone-shaped app with a bottom tab bar. On a desktop browser it renders
 // inside a phone frame so it can sit next to the laptop in a demo; on a real phone it is full-screen.
@@ -170,19 +171,21 @@ const TABS = [
   ['notes', 'Notes', 'notes'],
   ['team', 'Team', 'users'],
   ['sync', 'Sync', 'sync'],
+  ['admin', 'Admin', 'gear'],
 ]
 
 export default function MobileApp({
-  route, go, state, memories, cloud, conflicts, activity, audit, particles, syncing, chats, transition,
-  onToggleNetwork, onChanged, onRestore, onAudit, onDeleteChat,
+  route, go, state, memories, cloud, conflicts, egress, activity, audit, particles, syncing, chats, transition,
+  onToggleNetwork, onChanged, onRestore, onAudit, onDeleteChat, onPrefs,
 }) {
   const [sheet, setSheet] = useState(false)
   const online = state.network.online
-  const page = ['notes', 'team', 'sync'].includes(route[0]) ? route[0] : 'ask'
+  const page = ['notes', 'team', 'sync', 'admin'].includes(route[0]) ? route[0] : 'ask'
   const chatId = page === 'ask' && route[0] === 'chat' ? route[1] : null
   const openConflicts = conflicts.filter((c) => !c.resolved).length
-  const badges = { sync: state.sync.pending + openConflicts || null, team: null, notes: null, ask: null }
-  const title = { ask: chatId ? (chats.find((c) => c.id === chatId)?.title || 'Chat') : 'EdgeMind', notes: 'My notes', team: state.team?.name || 'Team', sync: 'Sync & privacy' }[page]
+  const badges = { sync: state.sync.pending + openConflicts || null, team: null, notes: null, ask: null,
+    admin: openConflicts || (audit && !audit.ok ? '!' : null) }
+  const title = { ask: chatId ? (chats.find((c) => c.id === chatId)?.title || 'Chat') : 'EdgeMind', notes: 'My notes', team: state.team?.name || 'Team', sync: 'Sync & privacy', admin: 'Admin' }[page]
 
   return (
     <div className={`m-stage ${online ? 'is-online' : 'is-offline'}`}>
@@ -220,6 +223,13 @@ export default function MobileApp({
           {page === 'sync' && (
             <SyncTab state={state} audit={audit} conflicts={conflicts} activity={activity} particles={particles}
               syncing={syncing} onToggleNetwork={onToggleNetwork} onRestore={onRestore} onAudit={onAudit} />
+          )}
+          {page === 'admin' && (
+            // The laptop's Admin, section for section; mobile.css fits it to the phone.
+            <AdminView tab={route[1] || 'overview'} go={go} state={state} memories={memories} cloud={cloud}
+              conflicts={conflicts} egress={egress} activity={activity} audit={audit} particles={particles}
+              syncing={syncing} onAudit={onAudit} onToggleNetwork={onToggleNetwork} onPrefs={onPrefs}
+              onRestore={onRestore} />
           )}
         </main>
 

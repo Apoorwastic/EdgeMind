@@ -26,8 +26,12 @@ New-Item -ItemType Directory -Force data | Out-Null
 # Central Qdrant Server: reuse one if already up, else Docker, else the native binary.
 function Test-Qdrant { try { Invoke-RestMethod http://127.0.0.1:6333/healthz -TimeoutSec 2 | Out-Null; $true } catch { $false } }
 if (-not (Test-Qdrant)) {
-  docker info *> $null
-  if ($LASTEXITCODE -eq 0) {
+  # With ErrorActionPreference=Stop, docker's "daemon not running" stderr would abort the script
+  # instead of falling back to the native binary, so probe it inside try/catch.
+  $dockerUp = $false
+  try { docker info *> $null; $dockerUp = ($LASTEXITCODE -eq 0) } catch { $dockerUp = $false }
+  $global:LASTEXITCODE = 0  # a failed probe must not become the script's exit code
+  if ($dockerUp) {
     docker compose up -d | Out-Null
   } else {
     $exe = "$root\tools\qdrant\qdrant.exe"

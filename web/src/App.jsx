@@ -162,7 +162,8 @@ export default function App() {
     return (
       <>{banner}<MobileApp route={route} go={go} state={state} memories={memories} cloud={cloud} conflicts={conflicts}
         activity={activity} audit={audit} particles={particles} syncing={syncing} chats={chats} transition={transition}
-        onToggleNetwork={toggleNetwork} onChanged={refresh} onAudit={refreshAudit} onDeleteChat={deleteChat}
+        egress={egress} onToggleNetwork={toggleNetwork} onChanged={refresh} onAudit={refreshAudit} onDeleteChat={deleteChat}
+        onPrefs={async (v) => { await api.setPrefs(v); refresh() }}
         onRestore={async (id) => { await api.restore(id); refreshCloud(); refresh() }} /></>
     )
   }
