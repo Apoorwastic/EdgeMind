@@ -43,7 +43,7 @@ SYSTEM_GENERAL = (
 
 # Keep the on-device model loaded between questions; reloading costs ~7 s on a CPU-only machine.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
-STALL_S = float(os.getenv("LOCAL_LLM_STALL_S", "45"))  # longest wait for the next token (incl. loading the model)
+STALL_S = float(os.getenv("LOCAL_LLM_STALL_S", "20"))  # longest wait for the next token (incl. loading the model)
 
 # Small local models sometimes keep writing past the answer ("### Instruction 2 ..."); cut them off.
 STOP = ["\n###", "### ", "\nQuestion:", "\nMemories:", "\nUser:", "<|end|>", "<|user|>", "<|im_end|>"]
