@@ -339,7 +339,26 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .r-general .answer-by { color: var(--cloud); }
 .bubble.r-general { border-style: dashed; border-color: rgba(124, 180, 255, 0.22); }
 .general-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
-.answer { white-space: pre-wrap; font-size: 15.5px; }
+.answer { font-size: 15.5px; line-height: 1.68; color: var(--text); }
+/* Answers are Markdown (web/src/Markdown.jsx): spaced like a chat assistant's, in the app's dark palette */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.85em; }
+.md ul, .md ol { margin: 0.2em 0 0.95em; padding-left: 1.45em; }
+.md li { margin: 0.42em 0; padding-left: 0.2em; }
+.md li > ul, .md li > ol { margin: 0.35em 0 0.2em; }
+.md ul > li::marker { color: var(--text-3); }
+.md ol > li::marker { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.md strong { font-weight: 600; color: var(--text); }
+.md em { font-style: italic; }
+.md h3, .md h4, .md h5, .md h6 { margin: 1.1em 0 0.5em; font-size: 1.04em; font-weight: 600; letter-spacing: -0.005em; text-transform: none; color: var(--text); }
+.md h3 { font-size: 1.12em; }
+.md code { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.88em; padding: 0.12em 0.38em; border-radius: 6px; background: rgba(255, 255, 255, 0.07); }
+.md pre { margin: 0.4em 0 1em; padding: 12px 14px; border-radius: 10px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); overflow-x: auto; }
+.md pre code { padding: 0; background: none; font-size: 0.86em; line-height: 1.55; }
+.md blockquote { margin: 0.4em 0 0.95em; padding: 0.1em 0 0.1em 0.9em; border-left: 3px solid var(--line-2, rgba(255,255,255,0.14)); color: var(--text-2); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+.md a { color: var(--ember-2); text-decoration: underline; text-underline-offset: 2px; }
 .bubble .time { font-size: 11.5px; color: var(--text-3); }
 .thinking { display: inline-flex; gap: 5px; padding: 6px 0; }
 .thinking i { width: 7px; height: 7px; border-radius: 50%; background: var(--ember); animation: dot 1.2s infinite ease-in-out; }

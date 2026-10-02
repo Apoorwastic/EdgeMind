@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ago, api, fmtTime } from './api.js'
 import { Icon } from './icons.jsx'
 import TeamPicker from './TeamPicker.jsx'
+import Markdown from './Markdown.jsx'
 import { LEVELS, isPersonal, level } from './privacy.js'
 
 const ROUTES = {
@@ -317,12 +318,12 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 {t.timing?.followup_of && (
                   <div className="searched-for"><Icon name="chat" size={11} /> Follow-up to “{t.timing.followup_of}”</div>
                 )}
-                <p className="answer">
-                  {t.text || (t.pending
+                <div className="answer md">
+                  {t.text ? <Markdown text={t.text} /> : (t.pending
                     ? <span className="thinking"><i /><i /><i /></span>
                     : t.stopped ? ''
-                      : t.route === 'retrieval' && !t.used?.length ? 'I couldn’t find anything about that in your notes.' : '')}
-                </p>
+                      : t.route === 'retrieval' && !t.used?.length ? <p>I couldn’t find anything about that in your notes.</p> : '')}
+                </div>
                 {t.stopped && <div className="stopped-note"><Icon name="stop" size={11} strokeWidth={2.4} /> Stopped{t.text ? '' : ' before answering'}</div>}
                 <Sources ids={t.used} memories={memories} />
                 {t.mode === 'general' && !t.pending && t.route !== 'retrieval' && (
