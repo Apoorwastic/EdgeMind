@@ -56,7 +56,10 @@ class Embedder:
             with _MODELS_LOCK:
                 if self.model not in _MODELS:
                     from fastembed import TextEmbedding  # imported lazily: ~0.4 s, and only for this backend
-                    _MODELS[self.model] = TextEmbedding(self.model, cache_dir=self.cache_dir)
+                    # One ONNX thread: a single short note takes ~15 ms either way, and every extra
+                    # thread costs memory (ONNX_THREADS raises it on big machines).
+                    _MODELS[self.model] = TextEmbedding(self.model, cache_dir=self.cache_dir,
+                                                        threads=int(os.getenv("ONNX_THREADS", "1")))
                 self._onnx = _MODELS[self.model]
         return self._onnx
 

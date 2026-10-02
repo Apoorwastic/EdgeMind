@@ -10,7 +10,8 @@ The sign-in address (GATEWAY_PORT, 8100) serves the web app and answers the logi
 other /api/ request goes straight to the device the signed session names (an in-process call, so
 streamed answers and live events pass through untouched). That device checks the session again.
 
-EDGEMIND_DEVICES=id,id,… runs only those devices; DEMO_ACCOUNTS=0 runs only the open ones (no login).
+EDGEMIND_DEVICES=id,id,… runs only those devices; DEMO_ACCOUNTS=0 runs only the open ones (no login);
+DEMO_OPEN_DEVICES=0 runs only the accounts (what the deploy does). `--ports` prints the ports and exits.
 """
 import asyncio
 import importlib
@@ -41,7 +42,17 @@ def wanted_devices() -> list[dict]:
         devices = [d for d in devices if d["id"] in keep]
     if os.getenv("DEMO_ACCOUNTS", "1") != "1":
         devices = [d for d in devices if not d.get("account")]
+    if os.getenv("DEMO_OPEN_DEVICES", "1") != "1":  # the deploy runs only the accounts behind the sign-in page
+        devices = [d for d in devices if d.get("account")]
     return devices
+
+
+def ports(devices: list[dict]) -> list[int]:
+    """Every port this host listens on: each device's, plus the sign-in address when accounts run."""
+    out = [d["port"] for d in devices]
+    if any(d.get("account") for d in devices):
+        out.append(int(os.getenv("GATEWAY_PORT", "8100")))
+    return out
 
 
 def load_device(d: dict, data_root: Path):
@@ -152,6 +163,23 @@ class _Server(uvicorn.Server):
         pass
 
 
+def rss_mb() -> int | None:
+    """This process's resident memory (Linux), for the deploy log."""
+    try:
+        for line in open("/proc/self/status"):
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) // 1024
+    except OSError:
+        return None
+
+
+async def report_memory(every: float = 60) -> None:
+    """Logs memory now and then, so a host that's near its limit shows it before it gets killed."""
+    while (mb := rss_mb()) is not None:
+        print(f"[edgemind] devices process memory: {mb} MB", flush=True)
+        await asyncio.sleep(every)
+
+
 async def main() -> None:
     data_root = Path(os.getenv("EDGEMIND_DATA") or config_mod._default_data_root())
     devices = wanted_devices()
@@ -165,10 +193,13 @@ async def main() -> None:
         port = int(os.getenv("GATEWAY_PORT", "8100"))
         servers.append(_Server(uvicorn.Config(Gateway(devices, apps), host="0.0.0.0", port=port, log_level="warning")))
         print(f"[edgemind] sign-in for every account on :{port}", flush=True)
-    await asyncio.gather(*(s.serve() for s in servers))
+    await asyncio.gather(*(s.serve() for s in servers), report_memory())
 
 
 if __name__ == "__main__":
+    if "--ports" in sys.argv:  # for scripts that wait for the devices: print the ports and stop
+        print(" ".join(map(str, ports(wanted_devices()))))
+        sys.exit(0)
     if sys.platform == "win32":  # see edge/__main__.py: the Proactor loop can drop its listening socket
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:

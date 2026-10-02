@@ -1,8 +1,9 @@
 # Public gateway for the all-in-one EdgeMind container.
-#   /          judge-facing demo page (laptop + phone side by side)
-#   /laptop/   device_a  (desktop UI)
-#   /mobile/   device_b  (phone UI)
-#   /app/      one sign-in page for the demo accounts (Rakshit, Apoorwa, Akhila); /login redirects here
+#   /          the sign-in page (redirects to /app/)
+#   /app/      one sign-in page for every demo account (deploy/demo.json); /login redirects here too
+#   /demo/     the side-by-side Laptop + Mobile page (needs DEMO_OPEN_DEVICES=1)
+#   /laptop/   device_a  (desktop UI, DEMO_OPEN_DEVICES=1)
+#   /mobile/   device_b  (phone UI, DEMO_OPEN_DEVICES=1)
 # flush_interval -1 keeps the streaming endpoints (answers as NDJSON, live events as SSE) unbuffered.
 {
 	auto_https off
@@ -14,17 +15,18 @@
 		respond "ok" 200
 	}
 
+	redir / /app/
+	redir /login /app/
+	redir /app /app/
+	redir /demo /demo/
 	redir /laptop /laptop/
 	redir /mobile /mobile/
 
-	redir /login /app/
-	redir /app /app/
 	handle_path /app/* {
 		reverse_proxy 127.0.0.1:8100 {
 			flush_interval -1
 		}
 	}
-
 	handle_path /laptop/* {
 		reverse_proxy 127.0.0.1:8101 {
 			flush_interval -1
@@ -35,7 +37,12 @@
 			flush_interval -1
 		}
 	}
-	handle {
+	handle_path /demo/* {
+		root * /app/deploy/site
+		file_server
+	}
+	# The old demo page registered a service worker at /sw.js; this one removes itself.
+	handle /sw.js {
 		root * /app/deploy/site
 		file_server
 	}

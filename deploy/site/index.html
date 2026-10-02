@@ -119,22 +119,22 @@
 
     <div class="mobile-cta">
       <p class="tag">You're on a phone. Open one device at a time:</p>
-      <a class="btn primary" href="mobile/">Open the Mobile device</a>
-      <a class="btn ghost" href="laptop/">Open the Laptop device</a>
-      <a class="btn ghost" href="login">Team accounts (sign in)</a>
+      <a class="btn primary" href="/mobile/">Open the Mobile device</a>
+      <a class="btn ghost" href="/laptop/">Open the Laptop device</a>
+      <a class="btn ghost" href="/app/">Team accounts (sign in)</a>
     </div>
 
     <section class="stage" aria-label="Two live devices">
       <div class="laptop-col">
-        <div class="device-label"><span><b>Laptop</b> · device_a · its own Qdrant Edge store</span><a href="laptop/" target="_blank" rel="noopener">open full screen ↗</a></div>
+        <div class="device-label"><span><b>Laptop</b> · device_a · its own Qdrant Edge store</span><a href="/laptop/" target="_blank" rel="noopener">open full screen ↗</a></div>
         <div class="window">
           <div class="window-bar"><i></i><i></i><i></i><span>edgemind · laptop</span></div>
-          <div class="viewport" id="laptop-vp"><iframe id="laptop" src="laptop/" title="EdgeMind Laptop device" width="1280" height="800"></iframe></div>
+          <div class="viewport" id="laptop-vp"><iframe id="laptop" src="/laptop/" title="EdgeMind Laptop device" width="1280" height="800"></iframe></div>
         </div>
       </div>
       <div class="phone-col">
-        <div class="device-label"><span><b>Mobile</b> · device_b</span><a href="mobile/" target="_blank" rel="noopener">open ↗</a></div>
-        <div class="phone" id="phone"><div class="viewport" id="phone-vp"><iframe id="mobile" src="mobile/" title="EdgeMind Mobile device" width="390" height="844"></iframe></div></div>
+        <div class="device-label"><span><b>Mobile</b> · device_b</span><a href="/mobile/" target="_blank" rel="noopener">open ↗</a></div>
+        <div class="phone" id="phone"><div class="viewport" id="phone-vp"><iframe id="mobile" src="/mobile/" title="EdgeMind Mobile device" width="390" height="844"></iframe></div></div>
       </div>
     </section>
 
@@ -189,7 +189,6 @@
     window.addEventListener('load', fit)
     fit()
     // Open once online and this page keeps working without internet (each device page has its own worker).
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
   </script>
 </body>
 </html>
