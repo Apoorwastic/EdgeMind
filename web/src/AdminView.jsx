@@ -135,7 +135,7 @@ function SyncTab({ state, particles, syncing }) {
   )
 }
 
-function SharedTab({ cloud, device, online }) {
+function SharedTab({ cloud, device, online, teams = [], teamId, onSelectTeam }) {
   return (
     <section className="panel">
       <div className="panel-head">
@@ -144,6 +144,16 @@ function SharedTab({ cloud, device, online }) {
           {online && cloud.live ? 'Live' : `Cached · ${ago(cloud.as_of)}`}
         </span>
       </div>
+      {teams.length > 1 && (
+        <div className="seg team-switch-inline" role="tablist" aria-label="Which team">
+          {teams.map((t) => (
+            <button key={t.id} role="tab" aria-selected={t.id === teamId}
+              className={t.id === teamId ? 'active shared' : ''} onClick={() => onSelectTeam?.(t.id)}>
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
       {!cloud.records.length ? <p className="muted">The shared store is empty.</p> : (
         <div className="table-wrap">
           <table className="table">
@@ -344,11 +354,12 @@ export default function AdminView(props) {
       <div className="admin-body">
         {tab === 'overview' && <Overview {...props} />}
         {tab === 'sync' && <SyncTab {...props} />}
-        {tab === 'shared' && <SharedTab cloud={props.cloud} device={state.device} online={state.network.online} />}
+        {tab === 'shared' && <SharedTab cloud={props.cloud} device={state.device} online={state.network.online}
+          teams={state.teams || []} teamId={props.teamId} onSelectTeam={props.onSelectTeam} />}
         {tab === 'conflicts' && <ConflictsTab conflicts={conflicts} onRestore={props.onRestore} />}
         {tab === 'privacy' && <PrivacyTab audit={audit} egress={props.egress} onAudit={props.onAudit} />}
         {tab === 'activity' && <ActivityTab activity={props.activity} />}
-        {tab === 'team' && <TeamPanel state={state} admin />}
+        {tab === 'team' && <TeamPanel state={state} memories={props.memories} admin onSelect={props.onSelectTeam} />}
         {tab === 'settings' && <SettingsTab state={state} onPrefs={props.onPrefs} onToggleNetwork={props.onToggleNetwork} />}
       </div>
     </div>

@@ -6,6 +6,9 @@ the cloud payload from an explicit allow-list of fields rather than copying
 the local record. Even if the UI or the sync manager were bypassed, a private
 record cannot be serialised into a cloud request by this module.
 """
+import asyncio
+from contextlib import asynccontextmanager
+
 from qdrant_client import AsyncQdrantClient, models
 
 from .events import EventBus
@@ -32,16 +35,37 @@ class CloudStore:
         self.gate = gate
         self.bus = bus
         self._ready = False
+        # Guards `self.collection`: with multiple teams, a sync pass flips it across several
+        # collections across several awaited network calls, and other request handlers (the cloud
+        # snapshot view, the privacy audit, team actions) can interleave on the same event loop. Without
+        # this lock they could read or push against whichever collection another coroutine just set.
+        self.lock = asyncio.Lock()
 
     def revalidate(self) -> None:
         """Forget that the collection exists, so the next call re-checks (and recreates) it."""
         self._ready = False
 
     def set_collection(self, name: str | None) -> None:
-        """Point at the current team's shared collection (None = not in a team: nothing to sync with)."""
+        """Point at a team's shared collection (None = not in a team: nothing to sync with).
+
+        Callers that need a specific team's collection should use `for_team()` instead, which also
+        holds the lock for the duration of the operation.
+        """
         if name != self.collection:
             self.collection = name
             self._ready = False
+
+    @asynccontextmanager
+    async def for_team(self, collection: str | None):
+        """Point at one team's collection and hold the lock until the caller is done with it.
+
+        Makes "point at this collection, then do the operation" atomic against every other
+        coroutine on the event loop that also touches `self.collection` (sync, snapshot, audit,
+        team actions) — see the lock's docstring above.
+        """
+        async with self.lock:
+            self.set_collection(collection)
+            yield self
 
     @property
     def active(self) -> bool:

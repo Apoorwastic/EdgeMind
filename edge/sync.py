@@ -1,14 +1,21 @@
 """Sync manager: the edge <-> cloud contract.
 
-Run order on every sync (reconnect, periodic tick, or "Sync now"):
+A device can belong to several teams; each one has its own collection on the Qdrant Server
+(`TeamManager.collection(team_id)`), and a shareable record is scoped to exactly one team via its
+`team_id` field. One sync run visits every joined team, one at a time, and for each does:
 
-  1. RETRACT  records that were shared but are now private or deleted
+  1. RETRACT  that team's records that were shared but are now private or deleted
               (sends the id only — content never leaves again).
-  2. PUSH     every record with sensitivity=shareable AND synced=false.
+  2. PUSH     that team's records with sensitivity=shareable AND synced=false.
               Private records are never selected (query filter), and the cloud
               client independently refuses to serialise them (CloudStore.cloud_payload).
-  3. PULL     new/updated shared records from other devices, and drop local
-              copies of records that were removed from the shared store.
+  3. PULL     new/updated records from other devices in that team, and drop local
+              copies of records that were removed from that team's shared store.
+
+Each team's pass is wrapped in `cloud.for_team(collection)`, which both points the shared
+`CloudStore` at that team's collection and holds a lock for the duration — necessary because a
+sync pass spans several awaited network calls, during which another request (the cloud snapshot
+view, the privacy audit, a team action) could otherwise observe or mutate the wrong collection.
 
 Conflict policy — last-write-wins, with nothing silently lost:
   Each shared record carries a revision number `rev`. A device remembers the
@@ -50,9 +57,20 @@ class SyncState:
 
     def __init__(self, path: Path):
         self.path = path
-        self.data = {"last_sync": None, "retractions": [], "conflicts": [], "cloud_cache": [], "cloud_cache_ts": None}
+        self.data = {"last_sync": None, "retractions": [], "conflicts": [], "cloud_cache": {}}
         if path.exists():
             self.data.update(json.loads(path.read_text(encoding="utf-8")))
+        # Pre-multi-team installs have a flat cloud_cache (one team's record list, plus a sibling
+        # cloud_cache_ts key) rather than {team_id: {"records": [...], "ts": ...}}. It's just a
+        # read-only fallback cache — safe to drop and let the next online sync repopulate it.
+        if not isinstance(self.data.get("cloud_cache"), dict):
+            self.data["cloud_cache"] = {}
+        self.data.pop("cloud_cache_ts", None)
+        # Pre-multi-team retractions have no team_id. There's no safe guess for which team they
+        # belonged to from here; app.py's boot-time migration backfills this when there's exactly
+        # one joined team (the only case where the answer is unambiguous).
+        for r in self.data["retractions"]:
+            r.setdefault("team_id", None)
 
     def save(self) -> None:
         self.path.write_text(json.dumps(self.data, indent=1), encoding="utf-8")
@@ -69,8 +87,8 @@ class SyncManager:
     def __init__(self, device_id: str, store: LocalMemory, cloud: CloudStore, embedder: Embedder,
                  gate: NetworkGate, bus: EventBus, state: SyncState, team=None, on_removed=None):
         self.device_id = device_id
-        self.team = team  # TeamManager: which team's collection to sync with (None team = nothing to sync)
-        self.on_removed = on_removed  # called when the admin removed this device from its team
+        self.team = team  # TeamManager: which teams' collections to sync with (None/[] = nothing to sync)
+        self.on_removed = on_removed  # called with a team_id when the admin removed this device from it
         self.store = store
         self.cloud = cloud
         self.embedder = embedder
@@ -82,9 +100,9 @@ class SyncManager:
 
     # ---- bookkeeping called by local edits --------------------------------
 
-    def queue_retraction(self, mem_id: str, reason: str) -> None:
+    def queue_retraction(self, mem_id: str, reason: str, team_id: str | None) -> None:
         r = [x for x in self.state["retractions"] if x["mem_id"] != mem_id]
-        r.append({"mem_id": mem_id, "reason": reason, "ts": now_ms()})
+        r.append({"mem_id": mem_id, "reason": reason, "ts": now_ms(), "team_id": team_id})
         self.state["retractions"] = r
 
     def status(self) -> dict:
@@ -93,6 +111,7 @@ class SyncManager:
             "running": self.running,
             "last_sync": self.state["last_sync"],
             "pending": stats["pending"],
+            "unassigned": stats["unassigned"],
             "retractions": len(self.state["retractions"]),
             "private_held": stats["private"],
             "conflicts": len([c for c in self.state["conflicts"] if not c.get("resolved")]),
@@ -104,7 +123,7 @@ class SyncManager:
         if not self.gate.online:
             self.bus.activity("sync", "Sync skipped — offline. Changes stay queued on device.", level="muted")
             return {"ok": False, "reason": "offline"}
-        if self.team is not None and not self.team.current:
+        if self.team is not None and not self.team.teams:
             if reason == "manual":
                 self.bus.activity("sync", "Not in a team yet — shared notes wait on this device until you create or join one.",
                                   level="muted")
@@ -116,17 +135,20 @@ class SyncManager:
                        "private_held": self.store.stats()["private"]}
             try:
                 self.cloud.revalidate()  # the server may have been reset or replaced since the last run
+                teams: list[dict] = []
                 if self.team is not None:
-                    if await self.team.refresh() is None:  # removed by the admin, or the team is gone
+                    teams, removed_ids = await self.team.refresh_all()
+                    for team_id in removed_ids:
                         if self.on_removed:
-                            self.on_removed()
-                        return {"ok": False, "reason": "removed-from-team"}
-                    self.cloud.set_collection(self.team.collection())
-                await self._retract(summary)
-                await self._push(summary)
-                await self._pull(summary)
-                self.state["cloud_cache"] = await self.cloud.snapshot()
-                self.state["cloud_cache_ts"] = now_ms()
+                            self.on_removed(team_id)
+                for team in teams:
+                    team_id = team["id"]
+                    async with self.cloud.for_team(self.team.collection(team_id)):
+                        await self._retract(team_id, summary)
+                        await self._push(team_id, summary)
+                        await self._pull(team_id, summary)
+                        snap = await self.cloud.snapshot()
+                    self.state["cloud_cache"] = {**self.state["cloud_cache"], team_id: {"records": snap, "ts": now_ms()}}
                 self.state["last_sync"] = now_ms()
                 changed = any(summary[k] for k in ("pushed", "pulled", "retracted", "removed", "requeued", "conflicts"))
                 if changed or reason == "manual":
@@ -148,8 +170,9 @@ class SyncManager:
                 self.bus.emit("sync", {"phase": "end", **self.status()})
                 self.bus.emit("memory", None)
 
-    async def _retract(self, summary: dict) -> None:
-        for r in list(self.state["retractions"]):
+    async def _retract(self, team_id: str, summary: dict) -> None:
+        mine = [x for x in self.state["retractions"] if x["team_id"] == team_id]
+        for r in mine:
             await self.cloud.retract(r["mem_id"], self.device_id, now_ms())
             self.state["retractions"] = [x for x in self.state["retractions"] if x["mem_id"] != r["mem_id"]]
             summary["retracted"] += 1
@@ -157,25 +180,27 @@ class SyncManager:
                               mem_id=r["mem_id"], direction="up")
 
     def _sanitize_links(self, rec: dict) -> dict:
-        """Don't let a shareable record point at a private one in the cloud."""
+        """Don't let a shareable record point at a private one, or at a different team's record,
+        in the cloud. Either case is dropped silently, same as the privacy guard below it."""
         rec = dict(rec)
         for key in ("supersedes", "superseded_by"):
             ref = rec.get(key)
             if ref:
                 target = self.store.get(ref)
-                if not target or target.get("sensitivity") != "shareable":
+                if (not target or target.get("sensitivity") != "shareable"
+                        or target.get("team_id") != rec.get("team_id")):
                     rec[key] = None
         return rec
 
-    async def _push(self, summary: dict) -> None:
-        pending = self.store.pending_push()
+    async def _push(self, team_id: str, summary: dict) -> None:
+        pending = self.store.pending_push(team_id)
         if pending:
             self.bus.emit("sync", {"phase": "push-plan", "ids": [r["mem_id"] for r in pending]})
         for rec in pending:
             mem_id = rec["mem_id"]
             full = self.store.get(mem_id, with_vector=True)
-            if not full or full.get("sensitivity") != "shareable":
-                continue  # re-tagged between planning and pushing
+            if not full or full.get("sensitivity") != "shareable" or full.get("team_id") != team_id:
+                continue  # re-tagged or reassigned between planning and pushing
             vec = full.pop("_vector")
             base = full.get("base_rev", 0) or 0
             remote = await self.cloud.get(mem_id)
@@ -215,7 +240,7 @@ class SyncManager:
             else:
                 conflict["winner"] = "remote"
                 [(payload, rvec)] = await self.cloud.fetch([mem_id])
-                self._apply_remote(payload, rvec)
+                self._apply_remote(payload, rvec, team_id)
                 summary["pulled"] += 1
             self.state["conflicts"] = [conflict] + self.state["conflicts"][:49]
             w = conflict[conflict["winner"]]
@@ -239,13 +264,14 @@ class SyncManager:
         self.bus.activity("sync", f"↑ pushed {rec['mem_id']} (rev {new_rev})", mem_id=rec["mem_id"], direction="up")
         await asyncio.sleep(0.12)  # pace the stream so the UI can show each record moving
 
-    def _apply_remote(self, payload: dict, vec: dict) -> None:
+    def _apply_remote(self, payload: dict, vec: dict, team_id: str) -> None:
         local = self.store.get(payload["mem_id"])
         rec = {
             "mem_id": payload["mem_id"],
             "text": payload.get("text", ""),
             "role": "note",
             "sensitivity": "shareable",
+            "team_id": team_id,
             "synced": True,
             "ts": payload.get("ts"),
             "updated_ts": payload.get("updated_ts"),
@@ -259,9 +285,9 @@ class SyncManager:
         }
         self.store.upsert(rec, list(vec["dense"]), to_edge_sparse(vec["bm25"]))
 
-    async def _pull(self, summary: dict) -> None:
+    async def _pull(self, team_id: str, summary: dict) -> None:
         index = await self.cloud.index()
-        local_shared = {r["mem_id"]: r for r in self.store.all() if r.get("sensitivity") == "shareable"}
+        local_shared = {r["mem_id"]: r for r in self.store.shared_for_team(team_id)}
 
         wanted = [
             m for m, meta in index.items()
@@ -271,7 +297,7 @@ class SyncManager:
         ]
         for payload, vec in await self.cloud.fetch(wanted):
             is_new = payload["mem_id"] not in local_shared
-            self._apply_remote(payload, vec)
+            self._apply_remote(payload, vec, team_id)
             summary["pulled"] += 1
             verb = "new" if is_new else f"updated → rev {payload.get('rev')}"
             self.bus.emit("sync-move", {"direction": "down", "mem_id": payload["mem_id"], "text": payload.get("text", "")[:80]})
@@ -299,7 +325,7 @@ class SyncManager:
                                   mem_id=m, level="warn")
 
     async def loop(self, every: float = 8.0) -> None:
-        """Background: sync whenever online. Keeps two devices converging without clicks."""
+        """Background: sync whenever online. Keeps devices converging without clicks."""
         while True:
             await asyncio.sleep(every)
             if self.gate.online and not self.lock.locked():

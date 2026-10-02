@@ -39,14 +39,33 @@ NS = uuid.UUID("5b7e1f0e-8a1d-4c3a-9d55-2f6b1a0e9e11")
 
 
 # qdrant-edge 0.8 can't filter on bool payloads, so sync status is mirrored into an
-# indexed keyword `sync_state` (private | queued | synced), derived here and only here.
+# indexed keyword `sync_state` (private | unassigned | queued | synced), derived here and only here.
+# "unassigned" = shareable but no team picked yet — distinct from "queued" (has a team, just offline),
+# because the fix for one is "pick a team" and the fix for the other is "wait for connectivity."
 PENDING = Filter(must=[FieldCondition("sync_state", match=MatchValue("queued"))])
+UNASSIGNED = Filter(must=[FieldCondition("sync_state", match=MatchValue("unassigned"))])
 
 
 def sync_state(rec: dict) -> str:
     if rec.get("sensitivity") != "shareable":
         return "private"
-    return "synced" if rec.get("synced") else "queued"
+    if rec.get("synced"):
+        return "synced"
+    return "unassigned" if rec.get("team_id") is None else "queued"
+
+
+def pending_push_filter(team_id: str | None) -> Filter:
+    must = [FieldCondition("sync_state", match=MatchValue("queued"))]
+    if team_id is not None:
+        must.append(FieldCondition("team_id", match=MatchValue(team_id)))
+    return Filter(must=must)
+
+
+def shared_for_team_filter(team_id: str) -> Filter:
+    return Filter(must=[
+        FieldCondition("sensitivity", match=MatchValue("shareable")),
+        FieldCondition("team_id", match=MatchValue(team_id)),
+    ])
 
 
 def point_id(mem_id: str) -> str:
@@ -73,6 +92,12 @@ class LocalMemory:
                 ("updated_ts", PayloadSchemaType.Float),
             ):
                 self.shard.update(UpdateOperation.create_field_index(field, schema))
+        # team_id is newer than the rest of the schema: an existing shard from before multi-team
+        # support won't have this index, so (re)try it unconditionally — harmless if it already exists.
+        try:
+            self.shard.update(UpdateOperation.create_field_index("team_id", PayloadSchemaType.Keyword))
+        except Exception:
+            pass
 
     # ---- writes -----------------------------------------------------------
 
@@ -86,7 +111,7 @@ class LocalMemory:
 
     def set_fields(self, mem_id: str, fields: dict[str, Any]) -> None:
         with self.lock:
-            if "synced" in fields or "sensitivity" in fields:
+            if "synced" in fields or "sensitivity" in fields or "team_id" in fields:
                 fields = {**fields, "sync_state": sync_state({**(self.get(mem_id) or {}), **fields})}
             self.shard.update(UpdateOperation.set_payload([point_id(mem_id)], fields))
             self.shard.flush()
@@ -119,8 +144,17 @@ class LocalMemory:
         out.sort(key=lambda r: r.get("updated_ts", 0), reverse=True)
         return out
 
-    def pending_push(self) -> list[dict]:
-        return self.all(PENDING)
+    def pending_push(self, team_id: str | None = None) -> list[dict]:
+        """Queued shareable records, scoped to one team (or every team if team_id is omitted)."""
+        return self.all(pending_push_filter(team_id))
+
+    def shared_for_team(self, team_id: str) -> list[dict]:
+        """This device's and others' shareable records belonging to one specific team.
+
+        The one place "this team's shared notes" is computed, so the scoping can't drift
+        between the call sites that need it (reset-on-leave, pull reconciliation).
+        """
+        return self.all(shared_for_team_filter(team_id))
 
     def count(self, flt: Filter | None = None) -> int:
         with self.lock:
@@ -135,6 +169,7 @@ class LocalMemory:
             "private": c("private"),
             "shareable": c("shareable"),
             "pending": self.count(PENDING),
+            "unassigned": self.count(UNASSIGNED),
         }
 
     def search(self, dense: list[float], sparse: SparseVector, limit: int = 6) -> list[dict]:

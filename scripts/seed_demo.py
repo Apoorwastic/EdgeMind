@@ -76,7 +76,8 @@ def reset():
         c.post("/api/network", json={"mode": "auto"})
         for m in c.get("/api/memories").json():
             c.delete(f"/api/memories/{m['mem_id']}")
-        c.post("/api/team/leave")
+        for t in c.get("/api/state").json()["teams"]:
+            c.post(f"/api/team/{t['id']}/leave")
         for chat in c.get("/api/chats").json():
             c.delete(f"/api/chats/{chat['id']}")
     # Team registry, every team's collection and the pre-team shared collection all share this prefix.
@@ -88,15 +89,18 @@ def reset():
 
 
 def ensure_team(name: str) -> None:
-    """A creates (or keeps) its team; B joins it with the invite code."""
-    ta = A.get("/api/state").json()["team"]
-    if not ta:
-        ta = A.post("/api/team", json={"name": name}).raise_for_status().json()["team"]
-    tb = B.get("/api/state").json()["team"]
-    if tb and tb["id"] != ta["id"]:
-        B.post("/api/team/leave").raise_for_status()
-        tb = None
-    if not tb:
+    """A creates (or keeps) a team; B joins it with the invite code.
+
+    Called before notes are seeded: a shareable note is stamped with its destination team at save
+    time now, so the team has to exist first for the demo's auto-assign-when-there's-exactly-one-team
+    path to pick it up (the one bit of this script a plain API-shape update wasn't enough for).
+    """
+    tas = A.get("/api/state").json()["teams"]
+    ta = tas[0] if tas else A.post("/api/team", json={"name": name}).raise_for_status().json()["result"]
+    tbs = B.get("/api/state").json()["teams"]
+    if not any(t["id"] == ta["id"] for t in tbs):
+        for t in tbs:
+            B.post(f"/api/team/{t['id']}/leave").raise_for_status()
         B.post("/api/team/join", json={"code": ta["code"]}).raise_for_status()
     print(f"team: {ta['name']} · invite code {ta['code']}")
 
@@ -109,6 +113,7 @@ def main():
 
     if args.reset:
         reset()
+    ensure_team(TEAM_NAMES[args.scenario])
     notes = SCENARIOS[args.scenario]
     for c, key in ((A, "a"), (B, "b")):
         c.post("/api/network", json={"mode": "auto"})
@@ -117,8 +122,6 @@ def main():
             if text in have:
                 continue
             c.post("/api/memories", json={"text": text, "sensitivity": sensitivity}).raise_for_status()
-
-    ensure_team(TEAM_NAMES[args.scenario])
     print("A sync:", A.post("/api/sync").json())
     print("B sync:", B.post("/api/sync").json())
     ensure_team(TEAM_NAMES[args.scenario])

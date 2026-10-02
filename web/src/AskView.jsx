@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ago, api, fmtTime } from './api.js'
 import { Icon } from './icons.jsx'
+import TeamPicker from './TeamPicker.jsx'
 
 const ROUTES = {
   cloud: { label: 'Answered by cloud AI', icon: 'cloud', cls: 'r-cloud' },
@@ -156,6 +157,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
   const current = useRef(undefined) // conversation shown right now; a new chat learns its id from the device
   const [mode, setMode] = useState('ask')
   const [sensitivity, setSensitivity] = useState('private')
+  const [teamId, setTeamId] = useState(null) // which team a 'shareable' note goes to
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [last, setLast] = useState(null) // last retrieval, shown in the memory rail
@@ -164,6 +166,13 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
   const scroller = useRef(null)
   const input = useRef(null)
   const online = state.network.online
+  const teams = state.teams || []
+
+  // Zero-friction single-team path: the moment "Team" is picked, auto-select the device's only
+  // team so the picker never has to be shown for that case.
+  useEffect(() => {
+    if (sensitivity === 'shareable' && teams.length === 1 && teamId !== teams[0].id) setTeamId(teams[0].id)
+  }, [sensitivity, teams, teamId])
 
   useEffect(() => {
     // The first question of a new chat changes the URL to its new id; that chat is already on screen.
@@ -233,16 +242,17 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
   const stop = () => abort.current?.abort()
 
   const remember = async (note) => {
-    const res = await api.addMemory(note, sensitivity)
-    setTurns((ts) => [...ts, { kind: 'note', text: note, ts: Date.now(), sensitivity, mem: res.memory,
-      related: res.related }])
+    const res = await api.addMemory(note, sensitivity, undefined, teamId)
+    setTurns((ts) => [...ts, { kind: 'note', text: note, ts: Date.now(), sensitivity, teamId: res.memory.team_id,
+      mem: res.memory, related: res.related }])
     onChanged()
   }
 
+  const needsTeamPick = sensitivity === 'shareable' && teams.length > 1 && !teamId
   const submit = async (e) => {
     e?.preventDefault()
     const v = text.trim()
-    if (!v || busy) return
+    if (!v || busy || (mode === 'remember' && needsTeamPick)) return
     setText('')
     setBusy(true)
     try { await (mode === 'ask' ? ask(v) : remember(v)) } finally { setBusy(false) }
@@ -261,6 +271,8 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
           {turns.map((t, i) => {
             if (t.kind === 'note') {
               const priv = t.sensitivity === 'private'
+              const tTeam = teams.find((x) => x.id === t.teamId)
+              const teamLabel = tTeam ? `Shared with ${tTeam.name}` : 'Shared with team'
               return (
                 <div key={i} className={`bubble saved ${priv ? 'private' : 'shared'}`}>
                   <div className="saved-head">
@@ -268,7 +280,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                     <b>Note saved</b>
                     <span className={`badge ${priv ? 'private' : online ? 'shared' : 'waiting'}`}>
                       <Icon name={priv ? 'lock' : online ? 'users' : 'queued'} size={12} />
-                      {priv ? 'Only me' : !state.team ? 'Shares once you join a team' : online ? 'Shared with team' : 'Will share when online'}
+                      {priv ? 'Only me' : !t.teamId ? 'Shares once you join a team' : online ? teamLabel : 'Will share when online'}
                     </span>
                   </div>
                   <p>{t.text}</p>
@@ -334,8 +346,11 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 <Icon name="plus" size={15} /> Save a note
               </button>
             </div>
-            {mode === 'remember' && <PrivacyChoice value={sensitivity} onChange={setSensitivity} />}
+            {mode === 'remember' && <PrivacyChoice value={sensitivity} onChange={(v) => { setSensitivity(v); if (v === 'private') setTeamId(null) }} />}
           </div>
+          {mode === 'remember' && sensitivity === 'shareable' && (
+            <TeamPicker teams={teams} value={teamId} onPick={setTeamId} onAdded={setTeamId} />
+          )}
           <div className="composer-input">
             <textarea ref={input} value={text} rows={2} onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -348,7 +363,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 <Icon name="stop" size={14} strokeWidth={2.4} /> Stop
               </button>
             ) : (
-              <button className="send" disabled={busy || !text.trim()} type="submit">
+              <button className="send" disabled={busy || !text.trim() || (mode === 'remember' && needsTeamPick)} type="submit">
                 {mode === 'ask' ? <><Icon name="arrowUp" size={16} strokeWidth={2.2} /> Ask</> : <><Icon name="check" size={16} strokeWidth={2.2} /> Save</>}
               </button>
             )}

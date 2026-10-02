@@ -66,30 +66,63 @@ store = LocalMemory(S.data_dir / "shard", S.embed_dim)
 cloud = CloudStore(S.qdrant_url, S.qdrant_api_key, S.collection, S.embed_dim, gate, bus)
 team = TeamManager(cloud.client, S.qdrant_url, S.collection, S.device_id, S.device_name, gate, bus,
                    S.data_dir / "team.json")
-cloud.set_collection(team.collection())  # each team shares through its own collection
+# Each team shares through its own collection; cloud.for_team(...) points at one per operation,
+# so no ambient "current" collection needs setting here.
 state = SyncState(S.data_dir / "sync_state.json")
 
 
-def reset_shared_state() -> None:
-    """Joining, leaving or being removed from a team changes who the shared notes belong with.
+def reset_shared_state(team_id: str, resolution: str = "private") -> None:
+    """Leaving a team, or being removed from one, changes who that team's shared notes belong with.
 
-    Notes pulled from other devices are dropped (they belong to the old team). This device's own
-    shared notes are kept and re-queued, so they upload to whichever team the device joins next.
-    Private notes are never touched.
+    Notes pulled from other devices in that team are always dropped (they belong to the team
+    you just left, not to you). This device's OWN notes for that team follow `resolution`:
+    "private" re-tags them private (kept, never synced again, no longer stuck pointing at a
+    team you can't reach) or "discard" deletes them outright. "private" is the only option when
+    this fires automatically (the admin removed this device, or the team vanished) — there's no
+    user present mid-sync to ask; it's also the safe default for an explicit Leave with no choice
+    made. Other teams, and already-private notes, are never touched.
     """
-    for rec in store.all():
-        if rec.get("sensitivity") != "shareable":
-            continue
+    for rec in store.shared_for_team(team_id):
         if rec.get("origin") and rec["origin"] != S.device_id:
             store.delete(rec["mem_id"])
+        elif resolution == "discard":
+            store.delete(rec["mem_id"])
         else:
-            store.set_fields(rec["mem_id"], {"synced": False, "rev": 0, "base_rev": 0})
-    state["retractions"] = []
-    state["cloud_cache"], state["cloud_cache_ts"] = [], None
-    cloud.set_collection(team.collection())
+            store.set_fields(rec["mem_id"], {
+                "sensitivity": "private", "team_id": None, "synced": False, "rev": 0, "base_rev": 0,
+                "private_since": now_ms(),
+            })
+    state["retractions"] = [r for r in state["retractions"] if r.get("team_id") != team_id]
+    state["cloud_cache"] = {k: v for k, v in state["cloud_cache"].items() if k != team_id}
     bus.emit("memory", None)
-    bus.emit("team", team.view())
+    bus.emit("team", team.view_all())
 
+
+def _migrate_team_id() -> None:
+    """Pre-multi-team devices have shareable records (and queued retractions) with no team_id.
+
+    If this device happens to belong to exactly one team, that's the unambiguous owner — backfill
+    it so an existing single-team install behaves identically after this upgrade. With zero or
+    several teams there's no safe guess, so those stay unassigned (surfaced in the UI as "needs a
+    team").
+    """
+    joined = team.teams
+    if len(joined) != 1:
+        return
+    only = joined[0]["id"]
+    for rec in store.all():
+        if rec.get("sensitivity") == "shareable" and rec.get("team_id") is None:
+            store.set_fields(rec["mem_id"], {"team_id": only})
+    retractions = state["retractions"]
+    if any(r.get("team_id") is None for r in retractions):
+        for r in retractions:
+            r.setdefault("team_id", None)
+            if r["team_id"] is None:
+                r["team_id"] = only
+        state["retractions"] = retractions
+
+
+_migrate_team_id()
 
 syncer = SyncManager(S.device_id, store, cloud, embedder, gate, bus, state, team=team, on_removed=reset_shared_state)
 local_llm = LocalLLM(S.ollama_url, S.local_llm, [S.local_llm_fallback])
@@ -147,12 +180,14 @@ app = FastAPI(title="EdgeMind device", lifespan=lifespan)
 class NewMemory(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     sensitivity: Literal["private", "shareable"] = "private"
+    team_id: str | None = None  # which team a shareable note goes to; auto-filled if there's only one
     supersedes: str | None = None
 
 
 class EditMemory(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=4000)
     sensitivity: Literal["private", "shareable"] | None = None
+    team_id: str | None = None
 
 
 class AskBody(BaseModel):
@@ -270,7 +305,7 @@ async def get_state():
             "cloud_llm_error": cloud_llm.rejected,
         },
         "prefs": prefs,
-        "team": team.view(),
+        "teams": team.view_all(),
     }
 
 
@@ -295,6 +330,18 @@ async def set_prefs(body: PrefBody):
 
 # ---------------------------------------------------------------- memory
 
+def resolve_team_id(requested: str | None) -> str | None:
+    """Which team a shareable note goes to: the one explicitly requested (validated), else the
+    device's sole team (zero-friction single-team path), else None — unassigned, the frontend
+    is responsible for steering the user to pick one."""
+    if requested is not None:
+        if not team.get(requested):
+            raise HTTPException(400, "You're not a member of that team.")
+        return requested
+    joined = team.teams
+    return joined[0]["id"] if len(joined) == 1 else None
+
+
 @app.get("/api/memories")
 async def list_memories():
     return [public(r) for r in store.all()]
@@ -309,14 +356,16 @@ async def add_memory(body: NewMemory):
     near = [h for h in store.search(dense, sparse, limit=4)
             if h["semantic"] >= RELATED_SEMANTIC and not h.get("superseded_by")]
     ts = now_ms()
+    tid = resolve_team_id(body.team_id) if body.sensitivity == "shareable" else None
     rec = {
-        "mem_id": new_id(), "text": text, "role": "user", "sensitivity": body.sensitivity,
+        "mem_id": new_id(), "text": text, "role": "user", "sensitivity": body.sensitivity, "team_id": tid,
         "synced": False, "ts": ts, "updated_ts": ts, "rev": 0, "base_rev": 0,
         "origin": S.device_id, "updated_by": S.device_id, "embedder": emb_name,
         "supersedes": None, "superseded_by": None,
     }
     store.upsert(rec, dense, sparse)
-    tag = "🔒 private — will never leave this device" if body.sensitivity == "private" else "shareable — queued for sync"
+    tag = ("🔒 private — will never leave this device" if body.sensitivity == "private"
+           else "queued for sync" if tid else "shareable — needs a team before it can sync")
     bus.activity("memory", f"Stored {rec['mem_id']} locally ({tag})", mem_id=rec["mem_id"], sensitivity=body.sensitivity)
     if body.supersedes:
         set_links(rec["mem_id"], body.supersedes)
@@ -330,18 +379,27 @@ async def edit_memory(mem_id: str, body: EditMemory):
     if not rec:
         raise HTTPException(404, "not found")
     fields: dict = {"updated_ts": now_ms(), "updated_by": S.device_id}
+    resulting_sensitivity = body.sensitivity or rec["sensitivity"]
 
-    if body.sensitivity and body.sensitivity != rec["sensitivity"]:
-        if body.sensitivity == "private":
-            if rec.get("origin") != S.device_id:
-                raise HTTPException(409, f"Shared by {rec.get('origin')} — it isn't yours to make private. Delete it or add your own note.")
-            if (rec.get("base_rev") or 0) > 0:
-                syncer.queue_retraction(mem_id, "re-tagged private")
-            fields.update(sensitivity="private", synced=False, rev=0, base_rev=0, private_since=now_ms())
-            bus.activity("privacy", f"{mem_id} re-tagged private — retraction queued; content will not sync again", mem_id=mem_id)
-        else:
-            fields.update(sensitivity="shareable", synced=False)
-            bus.activity("privacy", f"{mem_id} re-tagged shareable — queued for sync", mem_id=mem_id)
+    if body.sensitivity and body.sensitivity != rec["sensitivity"] and body.sensitivity == "private":
+        if rec.get("origin") != S.device_id:
+            raise HTTPException(409, f"Shared by {rec.get('origin')} — it isn't yours to make private. Delete it or add your own note.")
+        if (rec.get("base_rev") or 0) > 0:
+            syncer.queue_retraction(mem_id, "re-tagged private", rec.get("team_id"))
+        fields.update(sensitivity="private", team_id=None, synced=False, rev=0, base_rev=0, private_since=now_ms())
+        bus.activity("privacy", f"{mem_id} re-tagged private — retraction queued; content will not sync again", mem_id=mem_id)
+
+    elif resulting_sensitivity == "shareable" and (body.sensitivity == "shareable" or body.team_id is not None):
+        was_shareable = rec["sensitivity"] == "shareable"
+        current_team = rec.get("team_id") if was_shareable else None
+        target_team = resolve_team_id(body.team_id) if body.team_id is not None else (current_team or resolve_team_id(None))
+        if was_shareable and current_team and target_team != current_team and (rec.get("base_rev") or 0) > 0:
+            raise HTTPException(409, "This note already synced to a team — make it private, then re-share and pick the new team.")
+        fields.update(sensitivity="shareable", team_id=target_team)
+        if not was_shareable or target_team != current_team:
+            fields["synced"] = False
+        verb = "queued for sync" if target_team else "saved — needs a team before it can sync"
+        bus.activity("privacy", f"{mem_id} tagged shareable ({verb})", mem_id=mem_id)
 
     if body.text and body.text.strip() != rec["text"]:
         text = body.text.strip()
@@ -363,7 +421,7 @@ async def delete_memory(mem_id: str):
     if not rec:
         raise HTTPException(404, "not found")
     if rec.get("sensitivity") == "shareable" and (rec.get("base_rev") or 0) > 0:
-        syncer.queue_retraction(mem_id, "deleted")
+        syncer.queue_retraction(mem_id, "deleted", rec.get("team_id"))
     store.delete(mem_id)
     bus.activity("memory", f"Deleted {mem_id} from device", mem_id=mem_id)
     bus.emit("memory", None)
@@ -606,21 +664,31 @@ async def sync_now():
 
 
 @app.get("/api/cloud")
-async def cloud_view():
-    if gate.online and cloud.active:
+async def cloud_view(team_id: str):
+    if not team.get(team_id):
+        raise HTTPException(404, "not a member of that team")
+    cache = state["cloud_cache"].get(team_id, {"records": [], "ts": None})
+    if gate.online:
         try:
-            snap = await cloud.snapshot()
-            state["cloud_cache"], state["cloud_cache_ts"] = snap, now_ms()
-            return {"live": True, "records": snap, "as_of": state["cloud_cache_ts"]}
+            async with cloud.for_team(team.collection(team_id)):
+                snap = await cloud.snapshot()
+            state["cloud_cache"] = {**state["cloud_cache"], team_id: {"records": snap, "ts": now_ms()}}
+            return {"live": True, "records": snap, "as_of": state["cloud_cache"][team_id]["ts"]}
         except Exception:
             pass
-    return {"live": False, "records": state["cloud_cache"], "as_of": state["cloud_cache_ts"]}
+    return {"live": False, "records": cache["records"], "as_of": cache["ts"]}
 
 
 # ---------------------------------------------------------------- team
 
-async def team_call(fn, *args, resync: bool = False):
-    """Run a team action, mapping failures to messages the UI can show as-is."""
+async def team_call(fn, *args, reset: str | None = None, reset_resolution: str = "private"):
+    """Run a team action, mapping failures to messages the UI can show as-is.
+
+    `reset`, when given, is the team_id whose local shared state should be reset afterwards
+    (leaving a team) — creating or joining an *additional* team needs no reset, since nothing
+    about the device's other teams changes. `reset_resolution` ("private" or "discard") decides
+    what happens to this device's own notes for that team; see reset_shared_state().
+    """
     try:
         result = await fn(*args)
     except TeamError as e:
@@ -629,53 +697,54 @@ async def team_call(fn, *args, resync: bool = False):
         raise HTTPException(409, "You're offline — connect to the server to manage your team.")
     except Exception as e:
         raise HTTPException(503, f"Couldn't reach the team server ({type(e).__name__}).")
-    if resync:
-        reset_shared_state()
+    if reset:
+        reset_shared_state(reset, reset_resolution)
         asyncio.create_task(syncer.sync(reason="team"))
-    bus.emit("team", team.view())
-    return {"team": team.view(), "result": result}
+    bus.emit("team", team.view_all())
+    return {"teams": team.view_all(), "result": result}
 
 
 @app.get("/api/team")
 async def team_get():
-    """Current team + members; refreshed from the server when online, else the cached copy."""
-    if gate.online and team.current:
+    """Joined teams + members; refreshed from the server when online, else the cached copy."""
+    if gate.online and team.teams:
         try:
-            if await team.refresh() is None:
-                reset_shared_state()
+            _, removed_ids = await team.refresh_all()
+            for tid in removed_ids:
+                reset_shared_state(tid)
         except Exception:
             pass
-    return {"team": team.view()}
+    return {"teams": team.view_all()}
 
 
 @app.post("/api/team")
 async def team_create(body: TeamName):
-    return await team_call(team.create, body.name.strip(), resync=True)
+    return await team_call(team.create, body.name.strip())
 
 
 @app.post("/api/team/join")
 async def team_join(body: JoinBody):
-    return await team_call(team.join, body.code, resync=True)
+    return await team_call(team.join, body.code)
 
 
-@app.post("/api/team/leave")
-async def team_leave():
-    return await team_call(team.leave, resync=True)
+@app.post("/api/team/{team_id}/leave")
+async def team_leave(team_id: str, resolution: Literal["private", "discard"] = "private"):
+    return await team_call(team.leave, team_id, reset=team_id, reset_resolution=resolution)
 
 
-@app.post("/api/team/rename")
-async def team_rename(body: TeamName):
-    return await team_call(team.rename, body.name.strip())
+@app.post("/api/team/{team_id}/rename")
+async def team_rename(team_id: str, body: TeamName):
+    return await team_call(team.rename, team_id, body.name.strip())
 
 
-@app.post("/api/team/code")
-async def team_new_code():
-    return await team_call(team.new_code)
+@app.post("/api/team/{team_id}/code")
+async def team_new_code(team_id: str):
+    return await team_call(team.new_code, team_id)
 
 
-@app.delete("/api/team/members/{device_id}")
-async def team_remove(device_id: str):
-    return await team_call(team.remove, device_id)
+@app.delete("/api/team/{team_id}/members/{device_id}")
+async def team_remove(team_id: str, device_id: str):
+    return await team_call(team.remove, team_id, device_id)
 
 
 @app.get("/api/conflicts")
@@ -703,9 +772,12 @@ async def activity():
 
 @app.get("/api/privacy/audit")
 async def privacy_audit():
-    """Prove the boundary: compare private ids against (a) every outbound payload and (b) the live shared store.
+    """Prove the boundary: compare private ids against (a) every outbound payload and (b) every
+    team's live shared store.
 
-    (b) lists the server's ids and compares them here, so the audit itself sends nothing private.
+    (b) lists each team's server-side ids and compares them here, so the audit itself sends
+    nothing private. The guarantee has to cover every joined team, not just one — a future bug
+    in the per-team push path should still get caught here regardless of which team it hit.
     """
     private = {r["mem_id"]: r.get("private_since") or r.get("ts") or 0
                for r in store.all() if r.get("sensitivity") == "private"}
@@ -713,10 +785,15 @@ async def privacy_audit():
     # before the re-tag, so only outbound calls made while it was private count as violations.
     leaked = sorted(m for m, ts in gate.last_sent.items() if m in private and ts >= private[m])
     in_cloud: list[str] | None = None
-    if gate.online and cloud.active:
+    teams_checked = 0
+    if gate.online:
         try:
             # Tombstones carry no text or vectors, so only live records count as "in the cloud".
-            live = {m for m, meta in (await cloud.index()).items() if not meta.get("deleted")}
+            live: set[str] = set()
+            for t in team.teams:
+                async with cloud.for_team(team.collection(t["id"])):
+                    live |= {m for m, meta in (await cloud.index()).items() if not meta.get("deleted")}
+                teams_checked += 1
             in_cloud = sorted(set(private) & live)
         except Exception:
             in_cloud = None
@@ -726,6 +803,7 @@ async def privacy_audit():
         "outbound_calls": gate.calls,
         "private_in_outbound": leaked,
         "private_in_cloud": in_cloud,
+        "teams_checked": teams_checked,
         "pending_retraction": sorted(retracting & set(private)),
         "cloud_checked": in_cloud is not None,
         "ok": not leaked and not [m for m in (in_cloud or []) if m not in retracting],
