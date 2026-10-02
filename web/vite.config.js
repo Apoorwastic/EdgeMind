@@ -25,7 +25,8 @@ function serviceWorker() {
         .filter((f) => (f.type === 'chunk' ? eager.has(f.fileName) : !f.fileName.endsWith('.wasm')))
         .map((f) => f.fileName)
         .filter((f) => f !== 'sw.js')
-      const precache = ['./', ...files.filter((f) => f !== 'index.html')].sort()
+      // public/ files (manifest, icon) are copied as-is and aren't in the bundle; list them by hand.
+      const precache = ['./', 'manifest.webmanifest', 'icon.svg', ...files.filter((f) => f !== 'index.html')].sort()
       const version = createHash('sha1').update(precache.join('\n')).digest('hex').slice(0, 10)
       const src = readFileSync(new URL('./sw.template.js', import.meta.url), 'utf8')
         .replace('__VERSION__', version)

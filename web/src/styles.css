@@ -737,3 +737,27 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .oa-bar { height: 6px; border-radius: 999px; background: var(--glass-2); overflow: hidden; }
 .oa-bar i { display: block; height: 100%; border-radius: inherit; background: var(--grad); transition: width 0.3s; }
 .oa-note { display: flex; gap: 6px; align-items: center; margin: 0; font-size: 13px; color: var(--text-2); }
+.oa-sub { margin-top: 4px !important; font-size: 12.5px !important; }
+.oa-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; }
+.oa-models { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.oa-model { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: var(--r-sm); background: var(--glass); border: 1px solid var(--line); }
+.oa-model.installed { border-color: rgba(94, 230, 160, 0.35); }
+.oa-model-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13.5px; }
+.oa-model-main .muted { font-size: 12.5px; }
+.oa-model-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.oa-more summary { cursor: pointer; font-size: 13px; color: var(--text-2); list-style: none; }
+.oa-more summary::before { content: '›'; display: inline-block; margin-right: 6px; transition: transform 0.15s; }
+.oa-more[open] summary::before { transform: rotate(90deg); }
+.oa-more[open] > :not(summary) { margin-top: 10px; }
+.oa-facts { font-size: 13px; }
+.oa-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.oa-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.oa-toggle input { accent-color: var(--ember); }
+.ai-chip { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 5px 10px; border-radius: 999px;
+  font-size: 12px; color: var(--text-2); background: var(--glass-2); border: 1px solid var(--line); text-decoration: none; }
+.ai-chip:hover { color: var(--text); border-color: var(--line-2); }
+.oa-step { font-size: 13px; color: var(--text-2); }
+.oa-hint { font-size: 12px; }
+.oa-store { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 12.5px; line-height: 1.5; }
+.oa-store .icon { flex: none; margin-top: 3px; }

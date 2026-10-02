@@ -96,7 +96,7 @@ function Overview({ state, audit, cloud, conflicts, particles, syncing }) {
         </div>
       </section>
 
-      <OfflineAI state={state} />
+      <OfflineAI />
     </>
   )
 }

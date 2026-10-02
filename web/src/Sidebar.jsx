@@ -1,5 +1,6 @@
 import { Icon } from './icons.jsx'
 import { ago, api } from './api.js'
+import { AIDownloadChip } from './OfflineAI.jsx'
 
 function Logo() {
   return (
@@ -104,6 +105,8 @@ export default function Sidebar({ state, page, memories, cloud, audit, alerts, s
             <Icon name="sync" size={13} className={syncing ? 'spin' : ''} />
           </button>
         </div>
+
+        <AIDownloadChip />
 
         <a href="#/admin/privacy" className={`shield ${audit ? (audit.ok ? 'ok' : 'bad') : ''}`}
           title="Privacy audit — compares every private note against everything that left this device">

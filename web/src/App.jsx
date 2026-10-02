@@ -6,6 +6,7 @@ import AskView from './AskView.jsx'
 import NotesView from './NotesView.jsx'
 import AdminView from './AdminView.jsx'
 import MobileApp from './MobileApp.jsx'
+import { autoSetup } from './offline/brain.js'
 
 // Hash routes: #/ (new chat), #/chat/<cid>, #/notes, #/team, #/admin, #/admin/<tab>
 function useRoute() {
@@ -112,6 +113,8 @@ export default function App() {
 
   // Device became unreachable (browser mode) or came back (queued notes were just replayed): reload everything.
   useEffect(() => link.onChats(refreshChats), [refreshChats])
+  // On every start: is the offline AI here? If not, pick one that suits this device and download it.
+  useEffect(() => { autoSetup() }, [])
   useEffect(() => link.subscribe(() => { refresh(); refreshCloud().catch(() => {}); refreshAudit(); refreshChats() }),
     [refresh, refreshCloud, refreshAudit, refreshChats])
 

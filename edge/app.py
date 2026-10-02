@@ -9,6 +9,7 @@ from collections import deque
 import json
 import os
 import random
+import re
 import string
 import time
 from contextlib import asynccontextmanager
@@ -34,6 +35,27 @@ from .team import TeamError, TeamManager
 MIN_SEMANTIC = 0.60
 BAND = 0.15
 RELATED_SEMANTIC = 0.80
+# Keyword-only matches (used when a note's vector can't be compared, see local_search) must contain most
+# of the question's meaningful words: "grandmas birthday" matches "Grandma's birthday is…", but a lone
+# shared word ("birthday", "year") doesn't make "What is a leap year?" a question about your notes.
+_STOP = set("""a an the is are was were be been am i me my mine you your we our it its of to in on at for by with and
+or but not no do does did what whats when where who whom which why how can could should would will shall may might
+this that these those there here from about as into than then so if any some all tell give please thanks much many
+get got have has had s t""".split())
+
+
+def _terms(text: str) -> set[str]:
+    # "Wi-Fi" == "wifi", "Grandma's" == "grandma"
+    words = re.findall(r"[a-z0-9]+", text.lower().replace("-", "").replace("'s", "").replace("’s", ""))
+    return {re.sub(r"(ing|ed|es|s)$", "", w) if len(w) > 4 else w for w in words if w not in _STOP}
+
+
+def keyword_match(q: str, text: str) -> bool:
+    want = _terms(q)
+    if not want:
+        return False
+    hit = len(want & _terms(text))
+    return hit >= max(1, -(-len(want) * 3 // 5))  # at least 60% of the question's words, rounded up
 
 S = settings
 S.data_dir.mkdir(parents=True, exist_ok=True)
@@ -85,15 +107,22 @@ def new_id() -> str:
 
 
 async def reembed_fallbacks() -> None:
-    """Records embedded while Ollama was down get real vectors once it's back."""
-    if not await embedder.check():
-        return
-    for rec in store.all():
-        if rec.get("embedder") == "hash-fallback":
-            dense, name = await embedder.dense(rec["text"])
-            if name != "hash-fallback":
-                store.upsert({**rec, "embedder": name}, dense, embedder.sparse_doc(rec["text"]))
-                bus.activity("memory", f"Re-embedded {rec['mem_id']} with {name}", mem_id=rec["mem_id"])
+    """Give every note a vector from the current embedding model.
+
+    Notes saved while Ollama was down get a placeholder ("hash-fallback"); notes pulled from the shared
+    store carry whatever the other device used ("from-cloud"). Their meaning scores are useless against
+    this model's query vectors, so re-embed them — not just at boot, but whenever Ollama is back.
+    """
+    while True:
+        if await embedder.check():
+            for rec in store.all():
+                if rec.get("embedder") != embedder.name:
+                    dense, name = await embedder.dense(rec["text"])
+                    if name == "hash-fallback":
+                        break  # Ollama went away mid-way; try again next round
+                    store.upsert({**rec, "embedder": name}, dense, embedder.sparse_doc(rec["text"]))
+                    bus.activity("memory", f"Re-embedded {rec['mem_id']} with {name}", mem_id=rec["mem_id"])
+        await asyncio.sleep(60)
 
 
 @asynccontextmanager
@@ -159,12 +188,18 @@ async def local_search(q: str, limit: int = 6) -> tuple[list[dict], dict]:
     t1 = time.perf_counter()
     hits = store.search(dense, embedder.sparse_query(q), limit=limit)
     t2 = time.perf_counter()
-    top = max((h["semantic"] for h in hits), default=0)
+    # A meaning score only counts when the note's vector came from the same model as the question's.
+    # Notes embedded while Ollama was down ("hash-fallback") or pulled with another device's vector
+    # ("from-cloud") would score ~0 and be lost even on a perfect keyword match, so judge those by keywords.
+    real = emb_name != "hash-fallback"
+    same = [h for h in hits if real and h.get("embedder") == emb_name]
+    top = max((h["semantic"] for h in same), default=0)
+    kw_top = max((h["keyword"] for h in hits), default=0)
     for h in hits:
-        if emb_name == "hash-fallback":  # no real semantics available: trust keyword overlap only
-            h["relevant"] = h["keyword"] > 0
-        else:
+        if h in same:
             h["relevant"] = h["semantic"] >= MIN_SEMANTIC and h["semantic"] >= top - BAND
+        else:
+            h["relevant"] = h["keyword"] > 0 and h["keyword"] >= 0.5 * kw_top and keyword_match(q, h["text"])
     return hits, {"embed_ms": round((t1 - t0) * 1000, 1), "search_ms": round((t2 - t1) * 1000, 2)}
 
 
@@ -355,6 +390,18 @@ async def search(body: AskBody):
 
 # ---------------------------------------------------------------- ask
 
+NOTES_PER_PASS = 3  # notes per generation pass; small models answer better from a few than from many
+# "Your notes don't mention…" — the cue to try the next notes before giving up.
+NOT_FOUND = re.compile(
+    r"\b(do(es)?n['’]?t|do(es)? not|can['’]?t|cannot|could ?n['’]?t|no)\b.{0,40}\b(mention|contain|include|say|find|"
+    r"information|info|details?|record)|\bnot (mentioned|included|found|in (your|the|these) (notes|memories))", re.I)
+
+
+def newest_first(notes: list[dict]) -> list[dict]:
+    """The prompt lists memories newest first, so the model can prefer the newer of two conflicting notes."""
+    return sorted(notes, key=lambda h: h["ts"], reverse=True)
+
+
 def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
     """Decide who generates, and with which memories. Returns (route, reason, context).
 
@@ -363,13 +410,14 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
     """
     private = [h for h in context if h["sensitivity"] == "private"]
     local_ok = local_llm.available
+    no_local = local_llm.down_reason if local_llm.down_reason and not local_ok else "no on-device model"
     if not context:
         if gate.online and cloud_llm.configured:
             return "cloud", "no note matched · online → general answer from cloud model", []
         why = "offline" if not gate.online else (cloud_llm.rejected or "no cloud LLM key")
         if local_ok:
             return "local", f"no note matched · {why} → general answer on-device", []
-        return "retrieval", f"no note matched · {why} and no on-device model", []
+        return "retrieval", f"no note matched · {why} and {no_local}", []
     if gate.online and cloud_llm.configured:
         if not private:
             return "cloud", "online · context is shareable", context
@@ -378,11 +426,11 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
             return "cloud", f"online · {len(private)} private memories withheld from cloud", shared
         if local_ok:
             return "local", f"online, but {len(private)} private memories matched → answered on-device", context
-        return "retrieval", "private context and no on-device model → retrieval only", context
+        return "retrieval", f"private context and {no_local} → retrieval only", context
     why = "offline" if not gate.online else (cloud_llm.rejected or "no cloud LLM key")
     if local_ok:
         return "local", f"{why} → on-device model", context
-    return "retrieval", f"{why} and no on-device model → retrieval only", context
+    return "retrieval", f"{why} and {no_local} → retrieval only", context
 
 
 # Public deployments: cap questions per visitor so a shared link can't run up the cloud-LLM bill.
@@ -429,12 +477,16 @@ async def ask(body: AskBody, request: Request):
         try:
             yield json.dumps({"type": "chat", "cid": cid}) + "\n"
             bus.emit("searching", {"q": q})
-            hits, timing = await local_search(q)
+            hits, timing = await local_search(q, limit=8)
+            # Best match first. Small models lose track when handed many notes, so each pass sends only the
+            # best few; the next ones are tried only if those didn't contain the answer (see below).
             context = [h for h in hits if h["relevant"] and not h.get("superseded_by")]
-            context.sort(key=lambda h: h["ts"], reverse=True)
             if not local_llm.available:
                 await local_llm.check()  # Ollama may have come up after boot; don't stay model-less forever
-            route, reason, used = plan_route(context)
+            route, reason, used = plan_route(context[:NOTES_PER_PASS])
+            used = newest_first(used)
+            if len(context) > NOTES_PER_PASS:
+                reason += f" · best {len(used)} of {len(context)} matching notes sent"
             used_ids = [h["mem_id"] for h in used]
             general = not context  # nothing in memory matched → general-knowledge answer
             mode = "general" if general else "memory"
@@ -472,7 +524,7 @@ async def ask(body: AskBody, request: Request):
                         yield json.dumps({"type": "reroute", "route": "local", "reason": reason_fb + " → on-device model"}) + "\n"
                         answer = ""
                         try:
-                            async for tok in local_llm.stream(build_messages(q, context, history, general=general), max_tokens):
+                            async for tok in local_llm.stream(build_messages(q, newest_first(context[:NOTES_PER_PASS]), history, general=general), max_tokens):
                                 answer += tok
                                 yield json.dumps({"type": "token", "t": tok}) + "\n"
                         except Exception as e:
@@ -482,6 +534,31 @@ async def ask(body: AskBody, request: Request):
                     if final_route == "retrieval":
                         bus.activity("ask", f"'{q[:48]}' → no model answered: {reason_fb}", route="retrieval")
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": reason_fb}) + "\n"
+
+            # The best notes didn't have it ("your notes don't mention…")? Try the next few before giving up.
+            # Each batch is routed on its own, so a batch holding private notes still never goes to the cloud.
+            nxt = NOTES_PER_PASS
+            while final_route in ("cloud", "local") and not general and nxt < len(context) and NOT_FOUND.search(answer):
+                batch = context[nxt:nxt + NOTES_PER_PASS]
+                r2, why2, used2 = plan_route(batch)
+                if r2 not in ("cloud", "local"):
+                    break
+                used, final_route, answer = newest_first(used2), r2, ""
+                used_ids = [h["mem_id"] for h in used]
+                why = f"first notes didn't say → checked notes {nxt + 1}–{nxt + len(batch)} of {len(context)} ({why2})"
+                nxt += NOTES_PER_PASS
+                yield json.dumps({"type": "reroute", "route": r2, "reason": why, "used": used_ids}) + "\n"
+                hist = [t for t in history if not t.get("private")] if r2 == "cloud" else history
+                try:
+                    msgs = build_messages(q, used, hist, general=False)
+                    gen = cloud_llm.stream(msgs, used_ids) if r2 == "cloud" else local_llm.stream(msgs, max_tokens)
+                    async for tok in gen:
+                        answer += tok
+                        yield json.dumps({"type": "token", "t": tok}) + "\n"
+                except Exception as e:
+                    final_route, used = "retrieval", context[:4]
+                    yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r2} model error: {type(e).__name__}"}) + "\n"
+                    break
 
             if final_route == "retrieval":
                 answer = ("No generator available, so here is what your local memory says, verbatim:\n"

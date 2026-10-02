@@ -5,7 +5,7 @@
 // the client switches to "browser mode": reads come from the last copy this browser saw, note changes
 // queue in an outbox, and questions are answered by the browser's own search + offline AI. The outbox
 // is replayed to the device as soon as it answers again, and the device then syncs as usual.
-import { aiStatus, ask as askInBrowser, search as searchInBrowser } from './offline/brain.js'
+import { aiStatus, ask as askInBrowser, ensureEngine, search as searchInBrowser } from './offline/brain.js'
 import * as local from './offline/local.js'
 
 // Toggling Wi-Fi makes the browser abort requests for a moment (net::ERR_NETWORK_CHANGED), even to
@@ -42,6 +42,8 @@ function setBrowser(on) {
   browserSince = on ? Date.now() : null
   local.logActivity('network', on ? 'Device unreachable — running from this browser' : 'Device reachable again')
   if (!on) flushOutbox()
+  // Warm up the offline model now, so the first question asked offline doesn't wait for it to load.
+  if (on && aiStatus().downloaded) ensureEngine().catch((e) => console.warn('offline model failed to load', e))
   listeners.forEach((fn) => fn(on))
 }
 
@@ -138,8 +140,8 @@ function offlineState() {
     memory: { total: mem.length, private: mem.filter((m) => m.sensitivity === 'private').length,
       shareable: mem.filter((m) => m.sensitivity === 'shareable').length, pending },
     sync: { ...s.sync, running: false, pending },
-    models: { embedder: local.aiPrefs.get()?.embed ? 'MiniLM · in this browser' : 'keyword search · in this browser',
-      local_llm: ai.model, cloud_llm: null, cloud_llm_error: null },
+    models: { embedder: ai.search ? 'bge-small · in this browser' : 'keyword search · in this browser',
+      local_llm: local.aiPrefs.get()?.name || ai.model, cloud_llm: null, cloud_llm_error: null },
   }
 }
 
@@ -251,6 +253,17 @@ export const api = {
   // Aborting `signal` (the Stop button) closes the stream; the device stops generating and keeps the partial answer.
   // If the device can't be reached, the question is answered in this browser with the same events.
   async ask(q, cid, onEvent, signal) {
+    // The device is up but can't write answers (e.g. a small server whose model gets killed for lack of
+    // memory, and no cloud key): if this browser has the offline AI, let it write the answer instead.
+    const models = local.cache.get('api/state')?.models
+    if (!browserMode && models && !models.local_llm && !models.cloud_llm && aiStatus().downloaded) {
+      try {
+        return await askInBrowser(q, cid, onEvent, signal, { memories: local.mirrorMemories(), history: chatTurns(cid),
+          why: 'the server has no AI model running · answered in this browser' })
+      } finally {
+        chatListeners.forEach((fn) => fn())
+      }
+    }
     let r
     try {
       r = await send('api/ask', {

@@ -276,3 +276,7 @@
   .m-phone::before, .m-os { display: none; }  /* the real phone has its own status bar */
   .m-top { padding-top: env(safe-area-inset-top, 0px); height: calc(52px + env(safe-area-inset-top, 0px)); }
 }
+.m-phone .m-ai-chip { position: absolute; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 30; align-self: auto;
+  background: rgba(20, 20, 22, 0.92); backdrop-filter: var(--blur); }
+.m-phone .oa-facts { grid-template-columns: 1fr 1fr; }
+.m-phone .oa-model { padding: 10px; }

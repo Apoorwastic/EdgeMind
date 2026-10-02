@@ -213,7 +213,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
         } else if (ev.type === 'token') {
           patchLast((t) => ({ ...t, text: t.text + ev.t }))
         } else if (ev.type === 'reroute') {
-          patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '' }))
+          patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '', ...(ev.used ? { used: ev.used } : {}) }))
         } else if (ev.type === 'done') {
           patchLast((t) => ({ ...t, pending: false, route: ev.route }))
         }

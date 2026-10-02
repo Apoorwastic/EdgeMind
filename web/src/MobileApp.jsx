@@ -4,7 +4,7 @@ import { Icon } from './icons.jsx'
 import AskView from './AskView.jsx'
 import NotesView from './NotesView.jsx'
 import TeamView from './TeamView.jsx'
-import OfflineAI from './OfflineAI.jsx'
+import OfflineAI, { AIDownloadChip } from './OfflineAI.jsx'
 import AdminView from './AdminView.jsx'
 
 // Mobile device UI: a phone-shaped app with a bottom tab bar. On a desktop browser it renders
@@ -112,7 +112,7 @@ function SyncTab({ state, audit, conflicts, activity, particles, syncing, onTogg
         </button>
       </section>
 
-      <OfflineAI state={state} className="m-card" />
+      <OfflineAI className="m-card" />
 
       <section className="m-stats">
         <div className="m-stat private"><Icon name="lock" size={16} /><b>{memory.private}</b><span>Only me</span></div>
@@ -232,6 +232,8 @@ export default function MobileApp({
               onRestore={onRestore} />
           )}
         </main>
+
+        <AIDownloadChip className="m-ai-chip" />
 
         <nav className="m-tabs" aria-label="Main">
           {TABS.map(([key, label, icon]) => (

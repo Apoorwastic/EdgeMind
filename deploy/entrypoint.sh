@@ -19,13 +19,18 @@ log "starting Qdrant Server"
   QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__TELEMETRY_DISABLED=true QDRANT__LOG_LEVEL=WARN exec qdrant) &
 
 log "starting Ollama"
-OLLAMA_HOST=127.0.0.1:11434 ollama serve >"$DATA/ollama.log" 2>&1 &
+# Small hosts (e.g. Railway's smaller plans) get the runner killed for lack of RAM. Keep its footprint
+# down: one request at a time, a short context window, and the model unloaded when idle.
+# Set LOCAL_LLM=none to not run an on-device model at all (answers then come from the cloud model, or
+# from the visitor's own browser once they've downloaded the offline AI).
+OLLAMA_HOST=127.0.0.1:11434 OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}" OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-2}" OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-2048}"   ollama serve >"$DATA/ollama.log" 2>&1 &
 
 wait_for http://127.0.0.1:6333/healthz
 wait_for http://127.0.0.1:11434/api/tags
 
 # Models are normally baked into the image; if not, pull them once into $OLLAMA_MODELS.
 for m in "${EMBED_MODEL:-nomic-embed-text}" "${LOCAL_LLM:-qwen2.5:3b}"; do
+  [ "$m" = "none" ] && continue
   if ! ollama list | awk 'NR>1 {print $1}' | grep -qx -e "$m" -e "$m:latest"; then
     log "pulling $m (first start only)"
     ollama pull "$m" || log "could not pull $m, continuing in reduced mode"

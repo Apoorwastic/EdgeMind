@@ -71,9 +71,20 @@ class LocalLLM:
         self.preferred = [model, *(f for f in (fallbacks or []) if f and f != model)]
         self.model = model
         self.available: bool | None = None
+        # Set when the machine can't actually run the model (Ollama's runner was killed: out of memory).
+        # Installed is not the same as runnable, so check() won't re-enable it until the pause is over.
+        self.down_reason: str | None = None
+        self.down_until = 0.0
+
+    def mark_down(self, reason: str, seconds: float = 600) -> None:
+        self.available = False
+        self.down_reason = reason
+        self.down_until = time.time() + seconds
 
     async def check(self) -> bool:
         """Use the first preferred model that Ollama actually has installed."""
+        if time.time() < self.down_until:
+            return False
         try:
             async with httpx.AsyncClient(timeout=2) as c:
                 r = await c.get(f"{self.url}/api/tags")
@@ -110,7 +121,11 @@ class LocalLLM:
                         body = json.loads(body).get("error", body)
                     except (ValueError, AttributeError):
                         pass
-                    raise OllamaError(f"Ollama {r.status_code}: {body[:200]}")
+                    err = f"Ollama {r.status_code}: {body[:200]}"
+                    if any(k in body.lower() for k in ("killed", "out of memory", "terminated", "requires more system memory")):
+                        # Retrying only gets it killed again (and slows every answer): pause it for a while.
+                        self.mark_down(f"on-device model {self.model} can't run here — not enough memory")
+                    raise OllamaError(err)
                 async for line in r.aiter_lines():
                     if not line:
                         continue
