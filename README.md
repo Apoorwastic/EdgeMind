@@ -348,7 +348,7 @@ It covers ingest, hybrid search, push/pull, idempotent re-sync, the privacy audi
 | Variable | Default | Meaning |
 |---|---|---|
 | `GEMINI_API_KEY` | none | Cloud model (Gemini) for general and shareable questions. Takes priority over `OPENAI_API_KEY`. Without either key, the on-device model answers everything |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model name. If Google retires it, the app switches to `gemini-flash-latest` by itself |
 | `OPENAI_API_KEY` | none | Cloud model (OpenAI), used when no Gemini key is set |
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model name |
 | `QDRANT_URL` / `QDRANT_API_KEY` | `http://127.0.0.1:6333` | The shared Qdrant Server |

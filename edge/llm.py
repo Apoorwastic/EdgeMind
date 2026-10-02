@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from openai import APIStatusError, AsyncOpenAI, AuthenticationError, PermissionDeniedError
+from openai import APIStatusError, AsyncOpenAI, AuthenticationError, NotFoundError, PermissionDeniedError
 
 from .httpclient import http_client
 from .network import NetworkGate
@@ -43,6 +43,7 @@ SYSTEM_GENERAL = (
 
 # Keep the on-device model loaded between questions; reloading costs ~7 s on a CPU-only machine.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+GEMINI_LATEST = "gemini-flash-latest"  # Google's alias for the current Gemini Flash model
 STALL_S = float(os.getenv("LOCAL_LLM_STALL_S", "20"))  # longest wait for the next token (incl. loading the model)
 
 # Small local models sometimes keep writing past the answer ("### Instruction 2 ..."); cut them off.
@@ -218,9 +219,19 @@ class CloudLLM:
         size = sum(len(m["content"]) for m in messages)
         self.gate.egress(self.host, "cloud-generate", mem_ids, size)
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
-            )
+            try:
+                resp = await self.client.chat.completions.create(
+                    model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
+                )
+            except NotFoundError:
+                # The provider retired this model name (Google does this to Gemini versions). Switch to the
+                # alias that always points at the current Flash model, once, and keep using it.
+                if self.provider != "Gemini" or self.model == GEMINI_LATEST:
+                    raise
+                self.model = GEMINI_LATEST
+                resp = await self.client.chat.completions.create(
+                    model=self.model, messages=messages, stream=True, temperature=0.2, max_tokens=600
+                )
         except APIStatusError as e:
             # A revoked or wrong key never starts working mid-run: stop paying a round trip per question.
             # Gemini reports a bad key as 400 "API key not valid" rather than 401.

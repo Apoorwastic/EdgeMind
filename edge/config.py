@@ -66,7 +66,7 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 def _cloud_settings() -> dict:
     if key := os.getenv("GEMINI_API_KEY"):
         return dict(cloud_provider="Gemini", cloud_api_key=key,
-                    cloud_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), cloud_base_url=GEMINI_BASE_URL)
+                    cloud_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), cloud_base_url=GEMINI_BASE_URL)
     return dict(cloud_provider="OpenAI", cloud_api_key=os.getenv("OPENAI_API_KEY") or None,
                 cloud_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), cloud_base_url=None)
 
