@@ -27,9 +27,10 @@ RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/mlx_* /usr/lib/ollama/rocm* /u
 FROM ollama AS models
 ARG BAKE_MODELS=1
 # Embeddings run in-process (bge-small, baked below); only the answer model comes from Ollama.
+# Platforms such as Railway pass service variables as build args too: LOCAL_LLM=none bakes no model.
 ARG LOCAL_LLM=qwen2.5:3b
 ENV OLLAMA_MODELS=/models
-RUN mkdir -p /models && if [ "$BAKE_MODELS" = "1" ]; then \
+RUN mkdir -p /models && if [ "$BAKE_MODELS" = "1" ] && [ "$LOCAL_LLM" != "none" ]; then \
       (ollama serve >/tmp/ollama.log 2>&1 &) && sleep 5 && \
       ollama pull "$LOCAL_LLM"; \
     fi
