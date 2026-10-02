@@ -241,6 +241,12 @@ export async function logout() {
   local.forgetAll() // the next person on this browser must not see the copy of these notes
 }
 
+function rememberNetwork(network) {
+  const s = local.cache.get('api/state')
+  if (s && network && !browserMode) local.cache.put('api/state', { ...s, network })
+  return network
+}
+
 export const api = {
   state: () => req('GET', 'api/state'),
   memories: () => req('GET', 'api/memories'),
@@ -271,8 +277,10 @@ export const api = {
   activity: () => req('GET', 'api/activity'),
   egress: () => req('GET', 'api/egress'),
   audit: () => req('GET', 'api/privacy/audit'),
-  setNetwork: (mode) => req('POST', 'api/network', { mode }),
-  recheckNetwork: () => req('POST', 'api/network/recheck'),
+  // The toggle's new state goes into this page's copy at once, so a question asked right after
+  // switching offline is already routed to the browser's own AI (not at the next 5 s refresh).
+  setNetwork: async (mode) => rememberNetwork(await req('POST', 'api/network', { mode })),
+  recheckNetwork: async () => rememberNetwork(await req('POST', 'api/network/recheck')),
   setPrefs: (private_route) => req('POST', 'api/prefs', { private_route }),
   sync: () => req('POST', 'api/sync'),
   team: () => req('GET', 'api/team'),
