@@ -608,8 +608,13 @@ def newest_first(notes: list[dict]) -> list[dict]:
 
 def notes_answer(context: list[dict]) -> str:
     """No model may write the answer here (e.g. Private notes on a server without an on-device model):
-    give the one note that answers it best. The other matches stay listed under "Based on"."""
-    return f"From your notes: {context[0]['text']}"
+    give the note that answers it. When another note matches just as well (a near tie, whose order can
+    swap from one search to the next), show both rather than guess; the rest stay under "Based on"."""
+    top = context[0]
+    tied = [h for h in context[1:3] if abs(h.get("semantic", 0) - top.get("semantic", 0)) <= 0.02]
+    if not tied:
+        return f"From your notes: {top['text']}"
+    return "From your notes:\n" + "\n".join(f"• {h['text']}" for h in [top, *tied])
 
 
 def no_answer(local_err: str | None) -> str:
