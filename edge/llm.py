@@ -43,6 +43,7 @@ SYSTEM_GENERAL = (
 
 # Keep the on-device model loaded between questions; reloading costs ~7 s on a CPU-only machine.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+STALL_S = float(os.getenv("LOCAL_LLM_STALL_S", "45"))  # longest wait for the next token (incl. loading the model)
 
 # Small local models sometimes keep writing past the answer ("### Instruction 2 ..."); cut them off.
 STOP = ["\n###", "### ", "\nQuestion:", "\nMemories:", "\nUser:", "<|end|>", "<|user|>", "<|im_end|>"]
@@ -134,7 +135,17 @@ class LocalLLM:
             pass
 
     async def stream(self, messages: list[dict], max_tokens: int = 400) -> AsyncIterator[str]:
-        async with http_client(timeout=httpx.Timeout(120, connect=3)) as c:
+        # A model the machine can barely run (a small cloud host) can stall for minutes. If nothing comes
+        # for STALL_S seconds, give up, pause the model for 10 min, and let the caller fall back.
+        try:
+            async for t in self._stream(messages, max_tokens):
+                yield t
+        except httpx.TimeoutException:
+            self.mark_down(f"on-device model {self.model} is too slow on this machine")
+            raise OllamaError(f"the on-device model {self.model} sent nothing for {STALL_S:.0f} s, so it was skipped")
+
+    async def _stream(self, messages: list[dict], max_tokens: int) -> AsyncIterator[str]:
+        async with http_client(timeout=httpx.Timeout(STALL_S, connect=3)) as c:
             async with c.stream(
                 "POST",
                 f"{self.url}/api/chat",
