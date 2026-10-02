@@ -253,7 +253,7 @@ class SyncManager:
             "base_rev": payload.get("rev", 1),
             "origin": payload.get("from"),
             "updated_by": payload.get("updated_by"),
-            "embedder": (local or {}).get("embedder", "from-cloud"),
+            "embedder": payload.get("embedder") or (local or {}).get("embedder", "from-cloud"),
             "supersedes": payload.get("supersedes"),
             "superseded_by": payload.get("superseded_by"),
         }

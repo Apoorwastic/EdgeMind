@@ -26,12 +26,12 @@ RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/mlx_* /usr/lib/ollama/rocm* /u
 # ---- models (optional bake) ----------------------------------------------------------------------
 FROM ollama AS models
 ARG BAKE_MODELS=1
-ARG EMBED_MODEL=nomic-embed-text
+# Embeddings run in-process (bge-small, baked below); only the answer model comes from Ollama.
 ARG LOCAL_LLM=qwen2.5:3b
 ENV OLLAMA_MODELS=/models
 RUN mkdir -p /models && if [ "$BAKE_MODELS" = "1" ]; then \
       (ollama serve >/tmp/ollama.log 2>&1 &) && sleep 5 && \
-      ollama pull "$EMBED_MODEL" && ollama pull "$LOCAL_LLM"; \
+      ollama pull "$LOCAL_LLM"; \
     fi
 
 FROM qdrant/qdrant:${QDRANT_VERSION} AS qdrant
@@ -55,6 +55,9 @@ COPY --from=models --chown=user /models /models
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Bake the search model (~67 MB) so a fresh container doesn't download it on every start.
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/opt/fastembed')"     && chmod -R a+rX /opt/fastembed
 COPY --chown=user edge ./edge
 COPY --chown=user scripts ./scripts
 COPY --chown=user deploy ./deploy

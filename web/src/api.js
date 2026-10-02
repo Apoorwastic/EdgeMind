@@ -141,7 +141,7 @@ function offlineState() {
       shareable: mem.filter((m) => m.sensitivity === 'shareable').length, pending },
     sync: { ...s.sync, running: false, pending },
     models: { embedder: ai.search ? 'bge-small · in this browser' : 'keyword search · in this browser',
-      local_llm: local.aiPrefs.get()?.name || ai.model, cloud_llm: null, cloud_llm_error: null },
+      local_llm: ai.name, cloud_llm: null, cloud_llm_error: null },
   }
 }
 
@@ -256,7 +256,7 @@ export const api = {
     // The device is up but can't write answers (e.g. a small server whose model gets killed for lack of
     // memory, and no cloud key): if this browser has the offline AI, let it write the answer instead.
     const models = local.cache.get('api/state')?.models
-    if (!browserMode && models && !models.local_llm && !models.cloud_llm && aiStatus().downloaded) {
+    if (!browserMode && models && !models.local_llm && !models.cloud_llm && aiStatus().ready) {
       try {
         return await askInBrowser(q, cid, onEvent, signal, { memories: local.mirrorMemories(), history: chatTurns(cid),
           why: 'the server has no AI model running · answered in this browser' })

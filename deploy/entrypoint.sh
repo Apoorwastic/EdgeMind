@@ -29,7 +29,9 @@ wait_for http://127.0.0.1:6333/healthz
 wait_for http://127.0.0.1:11434/api/tags
 
 # Models are normally baked into the image; if not, pull them once into $OLLAMA_MODELS.
-for m in "${EMBED_MODEL:-nomic-embed-text}" "${LOCAL_LLM:-qwen2.5:3b}"; do
+# Embeddings run inside the device (bge-small via ONNX) unless EMBED_BACKEND=ollama.
+EMBED_PULL=none; [ "${EMBED_BACKEND:-onnx}" = "ollama" ] && EMBED_PULL="${EMBED_MODEL:-nomic-embed-text}"
+for m in "$EMBED_PULL" "${LOCAL_LLM:-qwen2.5:3b}"; do
   [ "$m" = "none" ] && continue
   if ! ollama list | awk 'NR>1 {print $1}' | grep -qx -e "$m" -e "$m:latest"; then
     log "pulling $m (first start only)"

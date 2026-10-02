@@ -213,9 +213,10 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
         } else if (ev.type === 'token') {
           patchLast((t) => ({ ...t, text: t.text + ev.t }))
         } else if (ev.type === 'reroute') {
-          patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '', ...(ev.used ? { used: ev.used } : {}) }))
+          patchLast((t) => ({ ...t, route: ev.route, reason: ev.reason, text: '', ...(ev.used ? { used: ev.used } : {}),
+            ...(ev.mode ? { mode: ev.mode } : {}) }))
         } else if (ev.type === 'done') {
-          patchLast((t) => ({ ...t, pending: false, route: ev.route }))
+          patchLast((t) => ({ ...t, pending: false, route: ev.route, ...(ev.mode ? { mode: ev.mode } : {}) }))
         }
       }, ctrl.signal)
     } catch (e) {
@@ -289,8 +290,11 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                   <div className="answer-by">
                     <Icon name={r.icon} size={13} /> {r.label}
                     {modelFor(t.route) && <span className="muted"> · {modelFor(t.route)}</span>}
-                    {t.timing && <span className="speed"><Icon name="search" size={11} /> {t.timing.search_ms} ms</span>}
+                    {t.timing && <span className="speed"><Icon name="search" size={11} /> {Math.round((t.timing.search_ms || 0) + (t.timing.embed_ms || 0))} ms</span>}
                   </div>
+                )}
+                {t.timing?.searched_for && (
+                  <div className="searched-for"><Icon name="search" size={11} /> Searched for “{t.timing.searched_for}”</div>
                 )}
                 <p className="answer">
                   {t.text || (t.pending
@@ -303,14 +307,25 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 {t.mode === 'general' && !t.pending && t.route !== 'retrieval' && (
                   <div className="general-note"><Icon name="info" size={12} /> Not from your notes — check important facts.</div>
                 )}
+                {!t.pending && !t.used?.length && !state.team && (
+                  // Visible, not tucked under "Why this answer?": the usual reason a note "isn't found" is that it
+                  // was saved on another device and the two aren't sharing.
+                  <div className="general-note team-hint">
+                    <Icon name="users" size={12} /> Nothing found on this device. It isn’t in a team, so notes saved on
+                    your other devices aren’t here — <a href="#/admin/team">create or join a team</a> to share them.
+                  </div>
+                )}
                 {!t.pending && t.reason && (
                   <details className="why">
                     <summary>Why this answer?</summary>
                     <ul>
-                      <li>Searched notes on this device{t.timing ? ` in ${Math.round(t.timing.search_ms)} ms` : ''} — {t.nHits ?? 0} matched.</li>
+                      <li>Searched notes on this device{t.timing ? ` in ${Math.round((t.timing.search_ms || 0) + (t.timing.embed_ms || 0))} ms` : ''} — {t.nHits ?? 0} matched{t.timing?.fast ? ' (every word of the question is in one note, so no AI search was needed)' : ''}.</li>
+                      {t.timing?.searched_for && <li>Corrected spelling: searched for “{t.timing.searched_for}”.</li>}
                       <li>{t.reason}.</li>
                       {t.used?.some((id) => memories.find((m) => m.mem_id === id)?.sensitivity === 'private') &&
                         <li>Private notes were used, so nothing was sent to the cloud.</li>}
+                      {!state.team && !t.used?.length &&
+                        <li>This device isn’t in a team, so notes saved on your other devices aren’t searched here.</li>}
                     </ul>
                   </details>
                 )}

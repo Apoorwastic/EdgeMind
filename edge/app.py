@@ -10,9 +10,12 @@ import json
 import os
 import random
 import re
+import shutil
 import string
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -26,46 +29,65 @@ from .embeddings import Embedder
 from .events import EventBus
 from .llm import CloudLLM, LocalLLM, OllamaError, build_messages
 from .network import NetworkGate, OfflineError
+from .search import Vocabulary, is_followup, is_personal
 from .store import LocalMemory
 from .sync import SyncManager, SyncState
 from .team import TeamError, TeamManager
 
 # nomic-embed-text puts unrelated notes around 0.40-0.55 cosine, so a hit counts as relevant
 # only above an absolute floor AND within a band of the best hit. Irrelevant hits never reach a model.
-MIN_SEMANTIC = 0.60
-BAND = 0.15
-RELATED_SEMANTIC = 0.80
-# Keyword-only matches (used when a note's vector can't be compared, see local_search) must contain most
-# of the question's meaningful words: "grandmas birthday" matches "Grandma's birthday is…", but a lone
-# shared word ("birthday", "year") doesn't make "What is a leap year?" a question about your notes.
-_STOP = set("""a an the is are was were be been am i me my mine you your we our it its of to in on at for by with and
-or but not no do does did what whats when where who whom which why how can could should would will shall may might
-this that these those there here from about as into than then so if any some all tell give please thanks much many
-get got have has had s t""".split())
-
-
-def _terms(text: str) -> set[str]:
-    # "Wi-Fi" == "wifi", "Grandma's" == "grandma"
-    words = re.findall(r"[a-z0-9]+", text.lower().replace("-", "").replace("'s", "").replace("’s", ""))
-    return {re.sub(r"(ing|ed|es|s)$", "", w) if len(w) > 4 else w for w in words if w not in _STOP}
-
-
-def keyword_match(q: str, text: str) -> bool:
-    want = _terms(q)
-    if not want:
-        return False
-    hit = len(want & _terms(text))
-    return hit >= max(1, -(-len(want) * 3 // 5))  # at least 60% of the question's words, rounded up
+# Relevance cut-offs depend on the embedding model's score scale (calibrated on the demo notes:
+# 18 exact, 18 misspelled, 14 reworded and 24 general questions).
+if settings.embed_backend == "onnx":   # bge-small-en-v1.5: right notes 0.55-0.85, general questions' best note <= 0.50
+    MIN_SEMANTIC, BAND, RELATED_SEMANTIC = 0.50, 0.08, 0.85  # weak matches need a shared word (STRONG)
+    STRONG = 0.58                       # below this a note must also share a word with the question
+    CLEAR_MIN, CLEAR_GAP = 0.47, 0.06   # a clear winner may sit a little below MIN_SEMANTIC
+else:                           # nomic-embed-text
+    MIN_SEMANTIC, BAND, RELATED_SEMANTIC = 0.60, 0.15, 0.80
+    STRONG = 0.60
+    CLEAR_MIN, CLEAR_GAP = 0.53, 0.08
+vocab = Vocabulary()  # words in this device's notes: typo correction + keyword checks (edge/search.py)
 
 S = settings
 S.data_dir.mkdir(parents=True, exist_ok=True)
 bus = EventBus(S.data_dir / "activity.jsonl")
 gate = NetworkGate(bus, S.qdrant_url, S.qdrant_api_key, S.data_dir / "egress.jsonl", S.internet_hosts)
-embedder = Embedder(S.ollama_url, S.embed_model, S.embed_dim)
-store = LocalMemory(S.data_dir / "shard", S.embed_dim)
+embedder = Embedder(S.ollama_url, S.embed_model, S.embed_dim, backend=S.embed_backend,
+                    cache_dir=os.getenv("FASTEMBED_CACHE_PATH") or str(S.data_dir.parent / "models"))
+
+
+def open_store() -> LocalMemory:
+    """The device's shard for the current vector size. Switching embedding model (768-d nomic → 384-d bge)
+    needs a new shard, since a shard's vector size is fixed: notes are copied over with placeholder vectors
+    and re-embedded in the background (reembed_fallbacks). The old shard is left untouched, for rollback."""
+    path = S.data_dir / ("shard" if S.embed_dim == 768 else f"shard{S.embed_dim}")
+    fresh = not path.exists() or not any(path.iterdir())
+    new = LocalMemory(path, S.embed_dim)
+    old_path = S.data_dir / "shard"
+    if fresh and path != old_path and old_path.exists() and any(old_path.iterdir()):
+        try:
+            # Read from a scratch copy: opening a shard writes to it (WAL, segment metadata), and the original
+            # must stay byte-for-byte as it was so switching back to the old model loses nothing.
+            scratch = Path(tempfile.mkdtemp(prefix="edgemind_migrate_")) / "shard"
+            shutil.copytree(old_path, scratch)
+            old = LocalMemory(scratch, 768)
+            recs = old.all()
+            old.close()
+            shutil.rmtree(scratch.parent, ignore_errors=True)
+            for rec in recs:
+                new.upsert({**rec, "embedder": "migrating"}, embedder._hash(rec["text"]), embedder.sparse_doc(rec["text"]))
+            print(f"[edgemind] moved {len(recs)} notes to the {S.embed_dim}-d shard; re-embedding in the background")
+        except Exception as e:  # never block boot on a migration; the old shard is still there
+            print(f"[edgemind] could not migrate notes from {old_path}: {e}")
+    return new
+
+
+store = open_store()
 cloud = CloudStore(S.qdrant_url, S.qdrant_api_key, S.collection, S.embed_dim, gate, bus)
+# Shared collections hold one vector size: 384-d notes go to "<team collection>_d384", apart from 768-d ones.
+COLLECTION_SUFFIX = "" if S.embed_dim == 768 else f"_d{S.embed_dim}"
 team = TeamManager(cloud.client, S.qdrant_url, S.collection, S.device_id, S.device_name, gate, bus,
-                   S.data_dir / "team.json")
+                   S.data_dir / "team.json", suffix=COLLECTION_SUFFIX)
 cloud.set_collection(team.collection())  # each team shares through its own collection
 state = SyncState(S.data_dir / "sync_state.json")
 
@@ -184,23 +206,47 @@ def public(rec: dict) -> dict:
 
 async def local_search(q: str, limit: int = 6) -> tuple[list[dict], dict]:
     t0 = time.perf_counter()
-    dense, emb_name = await embedder.dense(q, kind="query")
+    vocab.refresh(store.version, store.all())
+    query, fixes = vocab.correct(q)  # "plumbre" → "plumber": BM25 needs exact words, and so does the meaning vector
+    timing = {"searched_for": query if fixes else None}
+
+    # Keyword fast path: exactly one note holds every meaningful word of the question → that's the match,
+    # without waiting for the embedding model.
+    only = vocab.only_note_with_all(query)
+    if only and (rec := store.get(only)) and not rec.get("superseded_by"):
+        hit = {**rec, "semantic": 1.0, "keyword": 1.0, "relevant": True, "match": "all words"}
+        return [hit], {**timing, "embed_ms": 0.0, "search_ms": round((time.perf_counter() - t0) * 1000, 2), "fast": True}
+
     t1 = time.perf_counter()
-    hits = store.search(dense, embedder.sparse_query(q), limit=limit)
+    dense, emb_name = await embedder.dense(query, kind="query")
     t2 = time.perf_counter()
+    hits = store.search(dense, embedder.sparse_query(query), limit=limit)
+    t3 = time.perf_counter()
     # A meaning score only counts when the note's vector came from the same model as the question's.
-    # Notes embedded while Ollama was down ("hash-fallback") or pulled with another device's vector
-    # ("from-cloud") would score ~0 and be lost even on a perfect keyword match, so judge those by keywords.
+    # Notes embedded while the model was down ("hash-fallback"), pulled with another device's vector
+    # ("from-cloud") or mid-migration would score ~0 and be lost even on a perfect keyword match: judge
+    # those by keywords.
     real = emb_name != "hash-fallback"
-    same = [h for h in hits if real and h.get("embedder") == emb_name]
-    top = max((h["semantic"] for h in same), default=0)
+    same = sorted((h for h in hits if real and h.get("embedder") == emb_name), key=lambda h: -h["semantic"])
+    top = same[0]["semantic"] if same else 0
     kw_top = max((h["keyword"] for h in hits), default=0)
     for h in hits:
         if h in same:
-            h["relevant"] = h["semantic"] >= MIN_SEMANTIC and h["semantic"] >= top - BAND
+            # Weak matches (0.52-0.58) look alike for "Where did we leave the extra key?" (a note question)
+            # and "How do I change a car tyre?" (not one): only shared words tell them apart. Notes near a
+            # strong top match ride along, e.g. the router note for "How do I reset the internet box?".
+            h["relevant"] = (h["semantic"] >= MIN_SEMANTIC and h["semantic"] >= top - BAND
+                             and (top >= STRONG or vocab.covers(query, h["mem_id"], share=0.3)))
         else:
-            h["relevant"] = h["keyword"] > 0 and h["keyword"] >= 0.5 * kw_top and keyword_match(q, h["text"])
-    return hits, {"embed_ms": round((t1 - t0) * 1000, 1), "search_ms": round((t2 - t1) * 1000, 2)}
+            h["relevant"] = h["keyword"] > 0 and h["keyword"] >= 0.5 * kw_top and vocab.covers(query, h["mem_id"])
+    # Clear winner: nothing cleared the bar, but one note stands well above the rest and shares words with
+    # the question ("Who is the plumbre?" → the plumber note at 0.56 vs 0.43 for the next).
+    if same and not any(h["relevant"] for h in hits):
+        second = same[1]["semantic"] if len(same) > 1 else 0
+        if top >= CLEAR_MIN and top - second >= CLEAR_GAP and vocab.covers(query, same[0]["mem_id"], share=0.3):
+            same[0]["relevant"] = True
+            same[0]["match"] = "clear winner"
+    return hits, {**timing, "embed_ms": round((t2 - t1) * 1000, 1), "search_ms": round((t3 - t2 + t1 - t0) * 1000, 2)}
 
 
 def set_links(new_id_: str, old_id: str) -> None:
@@ -394,7 +440,8 @@ NOTES_PER_PASS = 3  # notes per generation pass; small models answer better from
 # "Your notes don't mention…" — the cue to try the next notes before giving up.
 NOT_FOUND = re.compile(
     r"\b(do(es)?n['’]?t|do(es)? not|can['’]?t|cannot|could ?n['’]?t|no)\b.{0,40}\b(mention|contain|include|say|find|"
-    r"information|info|details?|record)|\bnot (mentioned|included|found|in (your|the|these) (notes|memories))", re.I)
+    r"information|info|details?|record|provide|offer|specify|suggest|recommend|list)|"
+    r"\bnot (mentioned|included|found|in (your|the|these) (notes|memories))", re.I)
 
 
 def newest_first(notes: list[dict]) -> list[dict]:
@@ -478,9 +525,31 @@ async def ask(body: AskBody, request: Request):
             yield json.dumps({"type": "chat", "cid": cid}) + "\n"
             bus.emit("searching", {"q": q})
             hits, timing = await local_search(q, limit=8)
+            # Follow-up ("When is grandma's birthday?" → "What does she like?"): the question alone can't find
+            # the note, so search again together with the previous question. Only when the question alone found
+            # no strong match, so a new question that merely looks like a follow-up isn't pulled off course.
+            prev = next((t for t in reversed(history) if t["role"] == "user"), None)
+            followup = None
+            if prev and is_followup(q) and not (timing.get("fast") or any(
+                    h["relevant"] and h["semantic"] >= STRONG for h in hits)):
+                hits2, timing2 = await local_search(f"{prev['text']} {q}", limit=8)
+                if any(h["relevant"] for h in hits2):
+                    hits, timing, followup = hits2, {**timing2, "searched_for": timing.get("searched_for")}, prev
+                    timing["followup_of"] = prev["text"]
+            model_q = timing.get("searched_for") or q  # the model sees the spelling-corrected question
+            if followup:
+                model_q = f'Earlier question: "{followup["text"]}"\nFollow-up question: {model_q}'
+            plain_q = timing.get("searched_for") or q
+
+            def q_for(r: str) -> str:
+                # A previous question that used private notes stays on this device: no cloud context from it.
+                return plain_q if r == "cloud" and followup and followup.get("private") else model_q
+            personal = is_personal(q)  # "my …": with no matching note, say so instead of guessing
             # Best match first. Small models lose track when handed many notes, so each pass sends only the
             # best few; the next ones are tried only if those didn't contain the answer (see below).
             context = [h for h in hits if h["relevant"] and not h.get("superseded_by")]
+            # Only weak matches (none reached STRONG, no all-words hit): notes are offered, not imposed.
+            weak = bool(context) and not timing.get("fast") and all(h["semantic"] < STRONG for h in context[:NOTES_PER_PASS])
             if not local_llm.available:
                 await local_llm.check()  # Ollama may have come up after boot; don't stay model-less forever
             route, reason, used = plan_route(context[:NOTES_PER_PASS])
@@ -500,7 +569,7 @@ async def ask(body: AskBody, request: Request):
             local_err = None  # Ollama's own message when the on-device model fails (e.g. not enough memory)
             if route in ("cloud", "local"):
                 hist = [t for t in history if not t.get("private")] if route == "cloud" else history
-                msgs = build_messages(q, used, hist, general=general)
+                msgs = build_messages(q_for(route), used, hist, general=general, weak=weak, personal=personal)
                 try:
                     gen = cloud_llm.stream(msgs, used_ids) if route == "cloud" else local_llm.stream(msgs, max_tokens)
                     async for tok in gen:
@@ -524,7 +593,7 @@ async def ask(body: AskBody, request: Request):
                         yield json.dumps({"type": "reroute", "route": "local", "reason": reason_fb + " → on-device model"}) + "\n"
                         answer = ""
                         try:
-                            async for tok in local_llm.stream(build_messages(q, newest_first(context[:NOTES_PER_PASS]), history, general=general), max_tokens):
+                            async for tok in local_llm.stream(build_messages(q_for("local"), newest_first(context[:NOTES_PER_PASS]), history, general=general, personal=personal), max_tokens):
                                 answer += tok
                                 yield json.dumps({"type": "token", "t": tok}) + "\n"
                         except Exception as e:
@@ -550,7 +619,7 @@ async def ask(body: AskBody, request: Request):
                 yield json.dumps({"type": "reroute", "route": r2, "reason": why, "used": used_ids}) + "\n"
                 hist = [t for t in history if not t.get("private")] if r2 == "cloud" else history
                 try:
-                    msgs = build_messages(q, used, hist, general=False)
+                    msgs = build_messages(q_for(r2), used, hist, general=False)
                     gen = cloud_llm.stream(msgs, used_ids) if r2 == "cloud" else local_llm.stream(msgs, max_tokens)
                     async for tok in gen:
                         answer += tok
@@ -559,6 +628,26 @@ async def ask(body: AskBody, request: Request):
                     final_route, used = "retrieval", context[:4]
                     yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r2} model error: {type(e).__name__}"}) + "\n"
                     break
+
+            # None of the matching notes had it: the match was a false lead ("Recommend a good book" brushing
+            # past "The library books are due…"). Answer from general knowledge instead of "your notes don't say".
+            # Routed like any general question: only the question (no notes) may go to the cloud.
+            if final_route in ("cloud", "local") and not general and NOT_FOUND.search(answer):
+                r3, why3, _ = plan_route([])
+                if r3 in ("cloud", "local"):
+                    used, used_ids, mode, final_route, answer = [], [], "general", r3, ""
+                    yield json.dumps({"type": "reroute", "route": r3, "mode": "general", "used": [],
+                                      "reason": f"your notes didn't have it → general answer ({why3})"}) + "\n"
+                    hist = [t for t in history if not t.get("private")] if r3 == "cloud" else history
+                    try:
+                        msgs = build_messages(q_for(r3), [], hist, general=True, personal=personal)
+                        gen = cloud_llm.stream(msgs, []) if r3 == "cloud" else local_llm.stream(msgs, 600)
+                        async for tok in gen:
+                            answer += tok
+                            yield json.dumps({"type": "token", "t": tok}) + "\n"
+                    except Exception as e:
+                        final_route, used = "retrieval", context[:4]
+                        yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r3} model error: {type(e).__name__}"}) + "\n"
 
             if final_route == "retrieval":
                 answer = ("No generator available, so here is what your local memory says, verbatim:\n"

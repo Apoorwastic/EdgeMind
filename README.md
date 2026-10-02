@@ -121,7 +121,7 @@ Run locally, the "device" is your own computer (`localhost`), so turning the Wi-
 | App shell (service worker, `web/sw.template.js`) | The page itself opens with no internet | Browser Cache Storage |
 | Copy of your notes and chats (`web/src/offline/local.js`) | Refreshed from the device on every online visit. Notes saved offline wait in an outbox and are sent when the device is reachable again | Browser Local Storage |
 | Search (`web/src/offline/brain.js`) | Hybrid search over that copy: keywords, plus meaning once the search model is downloaded | Runs in the page |
-| **Offline AI** (optional download) | Writes answers from your notes, and general answers, using WebLLM on WebGPU | Browser Cache Storage |
+| **Offline AI** | Writes answers from your notes, and general answers: the browser's built-in model when it has one, otherwise WebLLM on WebGPU | Built-in: the browser's own storage. WebLLM: Browser Cache Storage |
 
 When a request to the device fails, `web/src/api.js` switches the page to browser mode, and the status card reads *Offline · running in this browser*. Without the Offline AI, offline answers show the matching notes word for word, and general questions get no written answer.
 
@@ -130,6 +130,8 @@ When a request to the device fails, `web/src/api.js` switches the page to browse
 1. Open the deployed link in a recent Chrome or Edge. The Offline AI needs WebGPU.
 2. Go to **Admin › Offline AI** (on the phone: the **Sync** tab), pick **Small** or **Standard**, and press **Download**. Wait until it finishes.
 3. Now go offline and reload. The page opens from the browser, and questions are answered on your computer.
+
+**Built-in model first.** Recent desktop Chrome (Gemini Nano) and Edge (Phi-4 mini) ship a model through the Prompt API (`LanguageModel`). The page checks for it first. If it's ready, the page uses it and downloads nothing into the site; an earlier automatic WebLLM download is removed to free the space. If the browser can fetch its model but hasn't yet, it starts on the first click on the page. Only when the browser has no built-in model (phones, Firefox, Safari, too little disk or memory) does the page download a WebLLM model sized to the device. A model you pick by hand in Admin › Offline AI is always used instead of the built-in one.
 
 **The models.** Each option has two builds of the same model. Graphics chips that support 16-bit maths (`shader-f16`, most recent laptops and phones) get `q4f16_1`, and older ones get `q4f32_1`. Sizes come from WebLLM 0.2.85 and Hugging Face.
 

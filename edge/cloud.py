@@ -12,7 +12,9 @@ from .events import EventBus
 from .network import NetworkGate
 from .store import point_id
 
-CLOUD_FIELDS = ("mem_id", "text", "ts", "updated_ts", "rev", "updated_by", "supersedes", "superseded_by")
+# "embedder" names the model that made the stored vector, so a device pulling the note knows whether it can
+# compare it with its own question vectors (same model) or must re-embed it first.
+CLOUD_FIELDS = ("mem_id", "text", "ts", "updated_ts", "rev", "updated_by", "supersedes", "superseded_by", "embedder")
 
 
 class PrivacyViolation(RuntimeError):

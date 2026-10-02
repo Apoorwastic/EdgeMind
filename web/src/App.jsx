@@ -7,6 +7,7 @@ import NotesView from './NotesView.jsx'
 import AdminView from './AdminView.jsx'
 import MobileApp from './MobileApp.jsx'
 import { autoSetup } from './offline/brain.js'
+import { OfflineAIWarning } from './OfflineAI.jsx'
 
 // Hash routes: #/ (new chat), #/chat/<cid>, #/notes, #/team, #/admin, #/admin/<tab>
 function useRoute() {
@@ -147,7 +148,10 @@ export default function App() {
     setState((s) => ({ ...s, network: n }))
   }
 
-  const banner = unreachable && <DeviceUnreachable />
+  const banner = <>
+    {unreachable && <DeviceUnreachable />}
+    <OfflineAIWarning browser={state?.network?.mode === 'browser'} local={LOCAL_HOST} />
+  </>
   if (!state) {
     return <>{banner}<div className="boot"><span className="boot-dot" /> {unreachable ? 'Can’t reach this device…' : 'Loading your memory…'}</div></>
   }

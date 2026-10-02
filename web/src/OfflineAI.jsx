@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './icons.jsx'
 import {
-  CATALOG, aiStatus, cancelInstall, deviceProfile, downloads, install, removeAI, resolve, setAutoDownload, storageInfo,
+  CATALOG, aiStatus, builtinName, cancelInstall, deviceProfile, downloads, install, removeAI, resolve, setAutoDownload, storageInfo,
 } from './offline/brain.js'
 
 export function useDownload() {
@@ -14,6 +14,12 @@ const gb = (n) => `${n < 1 ? Math.round(n * 1000) + ' MB' : n.toFixed(2).replace
 
 const mb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.round(b / 1e6)} MB`)
 const eta = (s) => (s == null ? 'estimating time…' : s < 90 ? `about ${Math.max(1, Math.round(s / 10) * 10)} s left` : `about ${Math.round(s / 60)} min left`)
+
+// What the browser's own model is doing, for "What this device can run".
+const BUILTIN = {
+  available: 'ready', downloading: 'the browser is fetching it', downloadable: 'can be fetched by the browser',
+  unavailable: 'not on this device', unsupported: 'not in this browser',
+}
 
 function Progress({ d, entry, gpu }) {
   const r = resolve(entry, gpu)
@@ -72,16 +78,23 @@ export default function OfflineAI({ className = 'panel' }) {
   useEffect(() => { storageInfo().then(setStore) }, [d.phase, status.model])
   const busy = d.phase === 'downloading'
   const target = CATALOG.find((e) => e.key === d.target)
-  const installed = CATALOG.find((e) => e.key === status.tier)
+  // By the exact model first: tiers get re-pointed to better models over time, and a model installed under
+  // an older tier name must still show as itself.
+  const installed = CATALOG.find((e) => e.f16 === status.model || e.f32 === status.model) ||
+    (status.model ? null : CATALOG.find((e) => e.key === status.tier))
   const main = CATALOG.filter((e) => !e.extra)
   const extra = CATALOG.filter((e) => e.extra)
 
   let line
   if (d.phase === 'checking' || !profile) line = 'Checking what this device can run…'
+  else if (status.using === 'builtin') line = <>Using <b>{builtinName()}</b> — the browser’s own model, so nothing is downloaded into this site.</>
+  else if (d.builtin === 'downloading') line = <>The browser is getting <b>{builtinName()}</b>{d.builtinP ? ` · ${Math.round(d.builtinP * 100)}%` : ''}. Nothing else needs downloading.</>
   else if (status.downloaded && installed) {
     const r = resolve(installed, profile.gpu)
     line = <>Installed: <b>{r.name}</b> ({installed.label}, {gb(r.gb)}) · {status.reason}</>
-  } else if (!profile.gpu.ok) line = profile.reason
+  } else if (d.builtin === 'downloadable' && !status.autoOff) line = <>This browser has a built-in model (<b>{builtinName()}</b>). It’s fetched the first time you click on the page.</>
+  else if (status.downloaded) line = <>Installed: <b>{status.name || status.model}</b> · {status.reason}</> // no longer in the list
+  else if (!profile.gpu.ok) line = profile.reason
   else if (status.autoOff) line = 'Not installed. Automatic download is off for this browser.'
   else if (d.text) line = d.text
   else line = `Not installed yet. This device suits the ${profile.reason}.`
@@ -89,7 +102,7 @@ export default function OfflineAI({ className = 'panel' }) {
   return (
     <section className={`${className} offline-ai`}>
       <div className="oa-head">
-        <span className={`oa-icon ${status.downloaded ? 'ok' : ''}`}><Icon name="chip" size={18} /></span>
+        <span className={`oa-icon ${status.ready ? 'ok' : ''}`}><Icon name="chip" size={18} /></span>
         <div>
           <h3>Offline AI</h3>
           <p className="muted">{line}</p>
@@ -101,7 +114,8 @@ export default function OfflineAI({ className = 'panel' }) {
 
       {busy && target && <Progress d={d} entry={target} gpu={profile?.gpu} />}
       {d.phase === 'error' && (
-        <p className="note-err"><Icon name="warn" size={13} /> Download failed: {d.error}
+        <p className="note-err"><Icon name="warn" size={13} /> Download stopped: {d.error}
+          {d.retrying && <span className="muted"> · tries again by itself</span>}
           {target && <button className="btn ghost small" onClick={() => install(target.key, { auto: d.auto })}>Try again</button>}
         </p>
       )}
@@ -124,7 +138,7 @@ export default function OfflineAI({ className = 'panel' }) {
         <details className="oa-more">
           <summary>What this device can run</summary>
           <div className="kv-grid oa-facts">
-            {profile.facts.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+            {[...profile.facts, ['Built-in model', BUILTIN[d.builtin] || 'checking…']].map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
           </div>
         </details>
       )}
@@ -163,5 +177,51 @@ export function AIDownloadChip({ className = '' }) {
     <a className={`ai-chip ${className}`} href="#/admin" title="Offline AI is downloading — open Admin to see or cancel">
       <Icon name="arrowDown" size={12} /> Offline AI {Math.round(d.p * 100)}%{d.bytes?.eta ? ` · ${Math.max(1, Math.round(d.bytes.eta / 60))} min` : ''}
     </a>
+  )
+}
+
+// Going offline before the offline AI is installed: say so once, plainly, so a general question that gets
+// no answer isn't a surprise. `browser` = the page is answering by itself (the device can't be reached);
+// `local` = the device runs on this computer and has its own model, so losing Wi-Fi alone doesn't matter.
+export function OfflineAIWarning({ browser, local }) {
+  const d = useDownload()
+  const [netOff, setNetOff] = useState(!navigator.onLine)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const on = () => setNetOff(false)
+    const off = () => setNetOff(true)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) }
+  }, [])
+  const offline = browser || (netOff && !local)
+  useEffect(() => { setOpen(offline && !aiStatus().ready) }, [offline])
+  if (!open || aiStatus().ready) return null
+
+  const noGpu = d.profile && !d.profile.gpu.ok
+  const pct = Math.round((d.p || 0) * 100)
+  return (
+    <div className="oa-warn-scrim" role="presentation" onClick={() => setOpen(false)}>
+      <div className="oa-warn" role="alertdialog" aria-modal="true" aria-labelledby="oa-warn-t" aria-describedby="oa-warn-d"
+        onClick={(e) => e.stopPropagation()}>
+        <span className="oa-warn-icon"><Icon name="warn" size={20} /></span>
+        <h3 id="oa-warn-t">You’re offline — Offline AI isn’t installed</h3>
+        <p id="oa-warn-d" className="muted">
+          {noGpu
+            ? 'This browser can’t run the offline AI (no WebGPU), so '
+            : pct > 0 ? `It was ${pct}% downloaded when the connection dropped, so ` : 'It hasn’t been downloaded yet, so '}
+          general questions won’t get answers until you’re back online. Questions about your notes still work —
+          you’ll see the matching notes instead of a written answer.
+        </p>
+        {!noGpu && (
+          <p className="muted oa-warn-sub">
+            {aiStatus().autoOff
+              ? 'To have it ready next time, turn on “Download automatically” in Admin → Offline AI.'
+              : 'The download carries on by itself when the connection comes back.'}
+          </p>
+        )}
+        <button className="btn primary" autoFocus onClick={() => setOpen(false)}>Got it</button>
+      </div>
+    </div>
   )
 }

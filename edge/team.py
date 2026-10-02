@@ -50,8 +50,9 @@ class TeamError(RuntimeError):
 
 class TeamManager:
     def __init__(self, client: AsyncQdrantClient, url: str, prefix: str, device_id: str, device_name: str,
-                 gate: NetworkGate, bus: EventBus, path: Path):
+                 gate: NetworkGate, bus: EventBus, path: Path, suffix: str = ""):
         self.client = client
+        self.suffix = suffix  # e.g. "_d384": collections hold vectors of one size only, so a new size gets its own
         self.url = url
         self.prefix = prefix
         self.registry = f"{prefix}_registry"
@@ -78,7 +79,7 @@ class TeamManager:
         return bool(self.current and self.current.get("role") == "admin")
 
     def collection(self) -> str | None:
-        return f"{self.prefix}_{self.current['id']}" if self.current else None
+        return f"{self.prefix}_{self.current['id']}{self.suffix}" if self.current else None
 
     def view(self) -> dict | None:
         """What the UI gets: the team plus the cached member list (works offline)."""

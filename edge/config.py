@@ -10,6 +10,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .embeddings import default_embedding
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
@@ -28,6 +30,7 @@ class Settings:
     internet_hosts: list[tuple[str, int]]
 
     ollama_url: str
+    embed_backend: str  # "onnx" (in-process bge-small, default) or "ollama"
     embed_model: str
     embed_dim: int
     local_llm: str
@@ -79,8 +82,7 @@ def load_settings() -> Settings:
         collection=os.getenv("QDRANT_COLLECTION", "edgemind_shared"),
         internet_hosts=_hosts(os.getenv("INTERNET_CHECK", "1.1.1.1:443,8.8.8.8:443")),
         ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/"),
-        embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
-        embed_dim=int(os.getenv("EMBED_DIM", "768")),
+        **dict(zip(("embed_backend", "embed_model", "embed_dim"), default_embedding())),
         local_llm=os.getenv("LOCAL_LLM", "qwen2.5:3b"),
         local_llm_fallback=os.getenv("LOCAL_LLM_FALLBACK", "phi3"),
         **_cloud_settings(),

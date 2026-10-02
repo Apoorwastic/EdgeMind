@@ -750,6 +750,21 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .oa-more summary::before { content: '›'; display: inline-block; margin-right: 6px; transition: transform 0.15s; }
 .oa-more[open] summary::before { transform: rotate(90deg); }
 .oa-more[open] > :not(summary) { margin-top: 10px; }
+.oa-warn-scrim {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 16px;
+  background: rgba(7, 8, 10, 0.62); backdrop-filter: blur(6px); animation: oa-fade 0.2s ease both;
+}
+.oa-warn {
+  width: min(420px, 100%); display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  padding: 22px; border-radius: var(--r); background: rgba(20, 20, 22, 0.96);
+  border: 1px solid rgba(245, 180, 84, 0.45); box-shadow: 0 0 60px -14px var(--waiting);
+}
+.oa-warn h3 { margin: 0; font-size: 16.5px; }
+.oa-warn p { margin: 0; font-size: 14px; line-height: 1.55; }
+.oa-warn .oa-warn-sub { font-size: 13px; }
+.oa-warn .btn { align-self: flex-end; margin-top: 6px; }
+.oa-warn-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--waiting-soft); color: var(--waiting); }
+@keyframes oa-fade { from { opacity: 0; } to { opacity: 1; } }
 .oa-facts { font-size: 13px; }
 .oa-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .oa-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
@@ -761,3 +776,7 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .oa-hint { font-size: 12px; }
 .oa-store { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 12.5px; line-height: 1.5; }
 .oa-store .icon { flex: none; margin-top: 3px; }
+.searched-for { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); margin-top: -2px; }
+.general-note.team-hint { display: flex; align-items: flex-start; line-height: 1.5; color: var(--text-2); }
+.general-note.team-hint .icon { flex: none; margin-top: 3px; }
+.general-note.team-hint a { color: var(--ember); }

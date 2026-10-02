@@ -58,6 +58,7 @@ class LocalMemory:
     def __init__(self, path: Path, dim: int):
         self.path = path
         self.lock = threading.RLock()
+        self.version = 0  # bumped on every write, so derived data (search vocabulary) knows when to rebuild
         path.mkdir(parents=True, exist_ok=True)
         config = EdgeConfig(
             vectors={"dense": EdgeVectorParams(size=dim, distance=Distance.Cosine)},
@@ -83,6 +84,7 @@ class LocalMemory:
                 UpdateOperation.upsert_points([Point(point_id(rec["mem_id"]), {"dense": dense, "bm25": sparse}, rec)])
             )
             self.shard.flush()
+            self.version += 1
 
     def set_fields(self, mem_id: str, fields: dict[str, Any]) -> None:
         with self.lock:
@@ -90,11 +92,13 @@ class LocalMemory:
                 fields = {**fields, "sync_state": sync_state({**(self.get(mem_id) or {}), **fields})}
             self.shard.update(UpdateOperation.set_payload([point_id(mem_id)], fields))
             self.shard.flush()
+            self.version += 1
 
     def delete(self, mem_id: str) -> None:
         with self.lock:
             self.shard.update(UpdateOperation.delete_points([point_id(mem_id)]))
             self.shard.flush()
+            self.version += 1
 
     # ---- reads ------------------------------------------------------------
 

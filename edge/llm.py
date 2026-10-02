@@ -25,6 +25,15 @@ SYSTEM = (
 )
 
 # Used when no note matches: behave like a general assistant, but never pretend the answer came from notes.
+# "What is MY plumber's number?" with no matching note: general knowledge can only guess (it once invented
+# a Pokémon called "Plumberry"). Personal facts are only in the user's notes, so say they weren't found.
+SYSTEM_PERSONAL = (
+    "You are EdgeMind, a personal memory assistant. The question is about the user's own life, and none of "
+    "their notes on this device answers it. If it asks for a personal fact (a number, date, name, code, place, "
+    "plan), say in one sentence that you couldn't find it in their notes, and do not guess or invent anything. "
+    "If it is really a general question (how to do something, general advice), answer it briefly."
+)
+
 SYSTEM_GENERAL = (
     "You are EdgeMind, a helpful assistant. Nothing in the user's personal notes matched this question, "
     "so answer from your general knowledge. Do not claim the answer comes from their notes or memories. "
@@ -38,9 +47,20 @@ KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 STOP = ["\n###", "### ", "\nQuestion:", "\nMemories:", "\nUser:", "<|end|>", "<|user|>", "<|im_end|>"]
 
 
-def build_messages(question: str, hits: list[dict], history: list[dict], general: bool = False) -> list[dict]:
+# The best matching note scored only weakly: it may be about something else ("How do I change a car tyre?"
+# brushing past the car-insurance note). Let the model use it only if it actually answers the question.
+SYSTEM_WEAK = (
+    "You are EdgeMind, a helpful assistant with access to some of the user's notes that MAY be related to the "
+    "question. If a note answers the question, answer from it, copying names, numbers and dates exactly, and "
+    "cite it like [1]. If none of the notes answers it, ignore them and answer from general knowledge without "
+    "mentioning the notes. Be concise (at most 6 sentences)."
+)
+
+
+def build_messages(question: str, hits: list[dict], history: list[dict], general: bool = False,
+                   weak: bool = False, personal: bool = False) -> list[dict]:
     if general:
-        msgs = [{"role": "system", "content": SYSTEM_GENERAL}]
+        msgs = [{"role": "system", "content": SYSTEM_PERSONAL if personal else SYSTEM_GENERAL}]
         for turn in history[-4:]:
             msgs.append({"role": turn["role"], "content": turn["text"]})
         msgs.append({"role": "user", "content": question})
@@ -55,7 +75,12 @@ def build_messages(question: str, hits: list[dict], history: list[dict], general
         context = "(no relevant memories found)"
     # Memory answers deliberately get no chat history: retrieval already ran on this question alone, and
     # small local models otherwise blend earlier turns into the answer (e.g. a previous note's date).
-    msgs = [{"role": "system", "content": SYSTEM}]
+    system = SYSTEM
+    if weak:
+        # A personal question ("my licence plate") brushing past a loosely related note must not get a guess.
+        system = SYSTEM_WEAK + (" If none of the notes answers it and it asks for a personal fact, say you couldn't "
+                                "find it in their notes; never guess or invent it." if personal else "")
+    msgs = [{"role": "system", "content": system}]
     msgs.append({"role": "user", "content": f"Memories:\n{context}\n\nQuestion: {question}"})
     return msgs
 

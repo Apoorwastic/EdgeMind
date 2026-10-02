@@ -189,7 +189,8 @@ export default function NotesView({ memories, state, onChanged }) {
 
       {results ? (
         <div className="result-note">
-          {shown.length ? `${shown.length} matching note${shown.length > 1 ? 's' : ''}` : 'No notes match that'} · found on this device in {Math.round(results.timing.search_ms)} ms
+          {shown.length ? `${shown.length} matching note${shown.length > 1 ? 's' : ''}` : 'No notes match that'}
+          {results.timing.searched_for ? ` for “${results.timing.searched_for}”` : ''} · found on this device in {Math.round((results.timing.search_ms || 0) + (results.timing.embed_ms || 0))} ms
         </div>
       ) : (
         <div className="filters" role="tablist">
