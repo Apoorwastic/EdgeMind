@@ -176,6 +176,30 @@ class LocalLLM:
                         break
 
 
+def describe_cloud_error(e: Exception, provider: str) -> str:
+    """A cloud model failure in plain words, for the answer and "Why this answer?"."""
+    status = getattr(e, "status_code", None)
+    body = getattr(e, "body", None)
+    detail = ""
+    if isinstance(body, dict):
+        err = body.get("error", body)
+        detail = (err.get("message") if isinstance(err, dict) else str(err)) or ""
+    elif isinstance(body, list) and body and isinstance(body[0], dict):  # Gemini wraps errors in a list
+        detail = (body[0].get("error") or {}).get("message", "")
+    detail = (detail or str(e)).strip().split("\n")[0][:160]
+    if status == 429:
+        return f"{provider} is rate-limited or out of free quota right now (429). {detail}"
+    if status == 404:
+        return f"{provider} doesn't know the model name set for this server (404). {detail}"
+    if status in (401, 403) or (status == 400 and "api key" in detail.lower()):
+        return f"{provider} rejected the API key ({status})."
+    if status:
+        return f"{provider} returned an error ({status}): {detail}"
+    if "timeout" in type(e).__name__.lower():
+        return f"{provider} didn't answer in time."
+    return f"{provider} couldn't be reached ({type(e).__name__})."
+
+
 class CloudLLM:
     def __init__(self, api_key: str | None, model: str, gate: NetworkGate,
                  provider: str = "OpenAI", base_url: str | None = None):

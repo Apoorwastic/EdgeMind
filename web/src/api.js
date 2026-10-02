@@ -296,7 +296,9 @@ export const api = {
     if (!browserMode && models && !models.local_llm && aiStatus().ready) {
       const memories = local.mirrorMemories()
       let why = null
+      const net = local.cache.get('api/state')?.network
       if (!models.cloud_llm) why = 'the server has no AI model running · answered in this browser'
+      else if (net && !net.online) why = 'offline, and the server has no on-device model · answered by the AI in this browser'
       else {
         const { hits } = await searchInBrowser(q, memories).catch(() => ({ hits: [] }))
         if (hits.some((h) => h.relevant && h.sensitivity !== 'shareable')) {

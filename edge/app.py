@@ -28,7 +28,7 @@ from .cloud import CloudStore
 from .config import settings
 from .embeddings import Embedder
 from .events import EventBus
-from .llm import CloudLLM, LocalLLM, OllamaError, build_messages
+from .llm import CloudLLM, LocalLLM, OllamaError, build_messages, describe_cloud_error
 from .network import NetworkGate, OfflineError
 from .search import Vocabulary, followup_kind, is_personal
 from .store import LocalMemory
@@ -617,17 +617,19 @@ def notes_answer(context: list[dict]) -> str:
     return "From your notes:\n" + "\n".join(f"• {h['text']}" for h in [top, *tied])
 
 
-def no_answer(local_err: str | None) -> str:
+def no_answer(local_err: str | None, cloud_err: str | None = None) -> str:
     """Nothing in the notes matched and no model answered: say what's missing, plainly."""
+    get_ai = "your browser can download its own AI in Admin › Offline AI"
     if local_err:
         return f"No note matches that, and the on-device model {local_llm.model} couldn't answer. {local_err}"
-    if not cloud_llm.configured and not local_llm.preferred:
-        return ("No note matches that. General questions need an AI model, and none is set up here: the server "
-                "needs a GEMINI_API_KEY, or your browser can download its own AI (Admin › Offline AI).")
     if not gate.online:
-        return "No note matches that. General questions need the internet, or an AI on this device."
-    if cloud_llm.configured:
-        return f"No note matches that, and the cloud model ({cloud_llm.provider}) couldn't answer just now. Try again in a moment."
+        if not local_llm.preferred:
+            return f"No note matches that. While offline, general questions need an AI on your own device: {get_ai}."
+        return "No note matches that. While offline, general questions need the on-device model, and it isn't responding."
+    if cloud_err:
+        return f"No note matches that, and the cloud model couldn't answer: {cloud_err}"
+    if not cloud_llm.configured and not local_llm.preferred:
+        return f"No note matches that. General questions need an AI model: set GEMINI_API_KEY on the server, or {get_ai}."
     return (f"No note matches that, and the on-device model {local_llm.model} isn't responding "
             "(is Ollama running?). Try again in a moment.")
 
@@ -751,6 +753,7 @@ async def ask(body: AskBody, request: Request):
 
             final_route = route
             local_err = None  # Ollama's own message when the on-device model fails (e.g. not enough memory)
+            cloud_err = None  # the cloud model's failure, in plain words (rate limit, bad model name, ...)
             if route in ("cloud", "local"):
                 hist = [t for t in history if not t.get("private")] if route == "cloud" else history
                 msgs = build_messages(q_for(route), used, hist, general=general, weak=weak, personal=personal)
@@ -766,7 +769,9 @@ async def ask(body: AskBody, request: Request):
                     final_route = "retrieval"
                     if isinstance(e, OllamaError):
                         local_err = str(e)
-                    reason_fb = f"{route} model error: {local_err or type(e).__name__}"
+                    if route == "cloud":
+                        cloud_err = describe_cloud_error(e, cloud_llm.provider)
+                    reason_fb = f"{route} model error: {cloud_err or local_err or type(e).__name__}"
                     if route == "cloud" and cloud_llm.rejected:
                         reason_fb = cloud_llm.rejected
                         bus.activity("system", f"{cloud_llm.rejected} — answering on-device until the key in .env is fixed and the device restarted")
@@ -834,7 +839,7 @@ async def ask(body: AskBody, request: Request):
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r3} model error: {type(e).__name__}"}) + "\n"
 
             if final_route == "retrieval":
-                answer = notes_answer(context) if context else no_answer(local_err)
+                answer = notes_answer(context) if context else no_answer(local_err, cloud_err)
                 yield json.dumps({"type": "token", "t": answer}) + "\n"
 
             save()
