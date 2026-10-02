@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ago, api, deviceName } from './api.js'
+import { ago, api, deviceName, logout } from './api.js'
 import { Icon } from './icons.jsx'
 import AskView from './AskView.jsx'
 import NotesView from './NotesView.jsx'
@@ -198,6 +198,10 @@ export default function MobileApp({
           {page === 'ask' ? (
             <button className="m-icon-btn" aria-label="Past chats" onClick={() => setSheet(true)}>
               <Icon name="chat" size={19} />
+            </button>
+          ) : state.device.account ? (
+            <button className="m-icon-btn" aria-label={`Sign out ${state.device.name}`} onClick={async () => { await logout(); window.location.reload() }}>
+              <Icon name="back" size={19} />
             </button>
           ) : <span className="m-top-spacer" />}
           <h1 className="m-title">{title}</h1>

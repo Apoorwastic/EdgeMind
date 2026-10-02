@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, link, subscribe } from './api.js'
+import { api, link, session as getSession, subscribe } from './api.js'
+import { scopeToAccount } from './offline/local.js'
 import Sidebar from './Sidebar.jsx'
 import TeamView from './TeamView.jsx'
 import AskView from './AskView.jsx'
 import NotesView from './NotesView.jsx'
 import AdminView from './AdminView.jsx'
 import MobileApp from './MobileApp.jsx'
+import Login from './Login.jsx'
 import { autoSetup } from './offline/brain.js'
 import { OfflineAIWarning } from './OfflineAI.jsx'
 
@@ -37,7 +39,17 @@ function DeviceUnreachable() {
   )
 }
 
+// Account devices (demo sign-in) ask who's there first; open devices go straight in.
 export default function App() {
+  const [session, setSession] = useState(null)
+  useEffect(() => { getSession().then(setSession) }, [])
+  if (!session) return <div className="boot"><span className="boot-dot" /></div>
+  if (session.required && !session.signed_in) return <Login session={session} />
+  scopeToAccount(session.account?.id, session.device?.id) // before anything reads this browser's copy
+  return <Main />
+}
+
+function Main() {
   const [route, go] = useRoute()
   const [state, setState] = useState(null)
   const [memories, setMemories] = useState([])

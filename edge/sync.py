@@ -17,6 +17,10 @@ Each team's pass is wrapped in `cloud.for_team(collection)`, which both points t
 sync pass spans several awaited network calls, during which another request (the cloud snapshot
 view, the privacy audit, a team action) could otherwise observe or mutate the wrong collection.
 
+After the teams, the account's vault (edge/vault.py) gets the same three steps for Private notes,
+sealed: retract, push ciphertext, pull + decrypt + embed locally. "This device only" notes are in
+neither pass — nothing selects them.
+
 Conflict policy — last-write-wins, with nothing silently lost:
   Each shared record carries a revision number `rev`. A device remembers the
   cloud rev its local copy was based on (`base_rev`). On push, if the cloud rev
@@ -38,6 +42,7 @@ from .embeddings import Embedder
 from .events import EventBus
 from .network import NetworkGate, OfflineError
 from .store import LocalMemory
+from .vault import VAULT_TEAM, Vault
 
 
 def now_ms() -> int:
@@ -85,8 +90,10 @@ class SyncState:
 
 class SyncManager:
     def __init__(self, device_id: str, store: LocalMemory, cloud: CloudStore, embedder: Embedder,
-                 gate: NetworkGate, bus: EventBus, state: SyncState, team=None, on_removed=None):
+                 gate: NetworkGate, bus: EventBus, state: SyncState, team=None, on_removed=None,
+                 vault: Vault | None = None):
         self.device_id = device_id
+        self.vault = vault  # the account's encrypted channel for Private notes (None/disabled = no account)
         self.team = team  # TeamManager: which teams' collections to sync with (None/[] = nothing to sync)
         self.on_removed = on_removed  # called with a team_id when the admin removed this device from it
         self.store = store
@@ -123,7 +130,8 @@ class SyncManager:
         if not self.gate.online:
             self.bus.activity("sync", "Sync skipped — offline. Changes stay queued on device.", level="muted")
             return {"ok": False, "reason": "offline"}
-        if self.team is not None and not self.team.teams:
+        has_vault = bool(self.vault and self.vault.enabled)
+        if self.team is not None and not self.team.teams and not has_vault:
             if reason == "manual":
                 self.bus.activity("sync", "Not in a team yet — shared notes wait on this device until you create or join one.",
                                   level="muted")
@@ -132,7 +140,7 @@ class SyncManager:
             self.running = True
             self.bus.emit("sync", {"phase": "start", "reason": reason, **self.status()})
             summary = {"pushed": 0, "pulled": 0, "retracted": 0, "removed": 0, "requeued": 0, "conflicts": 0,
-                       "private_held": self.store.stats()["private"]}
+                       "sealed": 0, "unsealed": 0, "private_held": self.store.stats()["private"]}
             try:
                 self.cloud.revalidate()  # the server may have been reset or replaced since the last run
                 teams: list[dict] = []
@@ -149,12 +157,20 @@ class SyncManager:
                         await self._pull(team_id, summary)
                         snap = await self.cloud.snapshot()
                     self.state["cloud_cache"] = {**self.state["cloud_cache"], team_id: {"records": snap, "ts": now_ms()}}
+                if has_vault:
+                    if self.vault.unlocked:
+                        async with self.cloud.for_team(self.vault.collection):
+                            await self._vault(summary)
+                    elif reason == "manual":
+                        self.bus.activity("sync", "Private notes wait on this device until you sign in here (the vault key comes from your password).",
+                                          level="muted")
                 self.state["last_sync"] = now_ms()
-                changed = any(summary[k] for k in ("pushed", "pulled", "retracted", "removed", "requeued", "conflicts"))
+                changed = any(summary[k] for k in ("pushed", "pulled", "retracted", "removed", "requeued", "conflicts", "sealed", "unsealed"))
                 if changed or reason == "manual":
                     self.bus.activity(
                         "sync",
                         f"Sync complete — ↑{summary['pushed']} pushed · ↓{summary['pulled']} pulled · "
+                        f"{summary['sealed']}↑ {summary['unsealed']}↓ private (encrypted) · "
                         f"{summary['conflicts']} conflict(s) · {summary['private_held']} private held on device",
                         summary=summary, reason=reason,
                     )
@@ -323,6 +339,70 @@ class SyncManager:
                 summary["requeued"] += 1
                 self.bus.activity("sync", f"Shared store has no copy of {m} — re-queued for upload (server reset or replaced?)",
                                   mem_id=m, level="warn")
+
+    # ---- the vault: Private notes between this account's own devices, encrypted --------------
+
+    async def _vault(self, summary: dict) -> None:
+        v = self.vault
+        for r in [x for x in self.state["retractions"] if x["team_id"] == VAULT_TEAM]:
+            await self.cloud.retract(r["mem_id"], self.device_id, now_ms())
+            self.state["retractions"] = [x for x in self.state["retractions"] if x["mem_id"] != r["mem_id"]]
+            summary["retracted"] += 1
+            self.bus.activity("sync", f"Removed {r['mem_id']} from your vault ({r['reason']})", mem_id=r["mem_id"], direction="up")
+
+        for rec in self.store.pending_vault():
+            mem_id = rec["mem_id"]
+            full = self.store.get(mem_id)
+            if not full or full.get("sensitivity") != "private":
+                continue
+            base = full.get("base_rev", 0) or 0
+            remote = await self.cloud.get(mem_id)
+            theirs = (remote or {}).get("updated_ts", 0), (remote or {}).get("updated_by") or ""
+            if remote and not remote.get("deleted") and remote.get("rev", 0) != base and \
+                    theirs > (full.get("updated_ts", 0), self.device_id):
+                # Your other device changed it later: keep that version (the pull below fetches it).
+                self.store.set_fields(mem_id, {"vault_synced": True, "rev": base})
+                continue
+            new_rev = max(base, (remote or {}).get("rev", 0)) + 1
+            await self.cloud.push_sealed(v.seal({**full, "rev": new_rev, "updated_by": full.get("updated_by") or self.device_id}))
+            self.store.set_fields(mem_id, {"vault_synced": True, "rev": new_rev, "base_rev": new_rev})
+            summary["sealed"] += 1
+            self.bus.emit("sync-move", {"direction": "up", "mem_id": mem_id, "text": "encrypted"})
+            self.bus.activity("sync", f"{mem_id} encrypted and sent to your vault (rev {new_rev}) — the server can't read it",
+                              mem_id=mem_id, direction="up")
+
+        index = await self.cloud.index()
+        local = {r["mem_id"]: r for r in self.store.private_all()}
+        wanted = [m for m, meta in index.items() if not meta.get("deleted") and (
+            (m not in local and not self.store.get(m))  # not here at all (a re-tagged note keeps its own copy)
+            or (m in local and local[m].get("vault_synced") and meta.get("rev", 0) > (local[m].get("rev") or 0)))]
+        for payload, _ in await self.cloud.fetch(wanted):
+            body = v.open(payload)
+            if body is None:
+                self.bus.activity("privacy", f"Couldn't decrypt {payload['mem_id']} — not sealed with this account's key", level="warn")
+                continue
+            dense, emb_name = await self.embedder.dense(body["text"])  # vectors never travel: made here
+            rec = {
+                "mem_id": payload["mem_id"], "text": body["text"], "role": "note", "sensitivity": "private",
+                "team_id": None, "synced": False, "vault_synced": True, "ts": body.get("ts"),
+                "updated_ts": payload.get("updated_ts"), "rev": payload.get("rev", 1), "base_rev": payload.get("rev", 1),
+                "origin": payload.get("from"), "updated_by": payload.get("updated_by"), "embedder": emb_name,
+                "supersedes": body.get("supersedes"), "superseded_by": body.get("superseded_by"),
+            }
+            self.store.upsert(rec, dense, self.embedder.sparse_doc(body["text"]))
+            summary["unsealed"] += 1
+            self.bus.emit("sync-move", {"direction": "down", "mem_id": rec["mem_id"], "text": body["text"][:60]})
+            self.bus.activity("sync", f"{rec['mem_id']} from your {payload.get('from')} decrypted on this device",
+                              mem_id=rec["mem_id"], direction="down")
+
+        for m, rec in local.items():
+            meta = index.get(m)
+            if meta and meta.get("deleted") and rec.get("vault_synced") and meta.get("rev", 0) > (rec.get("rev") or 0):
+                self.store.delete(m)  # deleted (or made device-only) on your other device
+                summary["removed"] += 1
+            elif meta is None and rec.get("vault_synced"):
+                self.store.set_fields(m, {"vault_synced": False, "rev": 0, "base_rev": 0})  # the vault lost it: send again
+                summary["requeued"] += 1
 
     async def loop(self, every: float = 8.0) -> None:
         """Background: sync whenever online. Keeps devices converging without clicks."""

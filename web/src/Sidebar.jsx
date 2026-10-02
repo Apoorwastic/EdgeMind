@@ -1,5 +1,5 @@
 import { Icon } from './icons.jsx'
-import { ago, api } from './api.js'
+import { ago, api, logout } from './api.js'
 import { AIDownloadChip } from './OfflineAI.jsx'
 
 function Logo() {
@@ -43,13 +43,21 @@ export default function Sidebar({ state, page, memories, cloud, audit, alerts, s
 
   return (
     <aside className="sidebar">
-      <a className="brand" href="#/" aria-label="EdgeMind home">
-        <Logo />
-        <span className="brand-text">
-          <span className="brand-name">EdgeMind</span>
-          <span className="brand-device" title={`${device.id} · port ${device.port}`}>{device.name}</span>
-        </span>
-      </a>
+      <div className="brand-row">
+        <a className="brand" href="#/" aria-label="EdgeMind home">
+          <Logo />
+          <span className="brand-text">
+            <span className="brand-name">EdgeMind</span>
+            <span className="brand-device" title={`${device.id} · port ${device.port}`}>{device.name}</span>
+          </span>
+        </a>
+        {device.account && (
+          <button type="button" className="brand-out" title={`Sign out ${device.name}`} aria-label="Sign out"
+            onClick={async () => { await logout(); window.location.reload() }}>
+            <Icon name="back" size={15} />
+          </button>
+        )}
+      </div>
 
       <a href="#/" className={`new-chat ${page === 'ask' && !chatId ? 'active' : ''}`}>
         <Icon name="plus" size={16} strokeWidth={2.2} /> <span className="side-label">New chat</span>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from './icons.jsx'
 import {
   CATALOG, aiStatus, builtinName, cancelInstall, deviceProfile, downloads, install, removeAI, resolve, setAutoDownload, storageInfo,
+  usePreference,
 } from './offline/brain.js'
 
 export function useDownload() {
@@ -57,12 +58,17 @@ function ModelRow({ entry, profile, status, busy }) {
       <div className="oa-model-tags">
         {recommended && <span className="badge shared">Recommended</span>}
         {tooBig && <span className="badge waiting">May be slow here</span>}
-        {installed
-          ? <span className="badge neutral"><Icon name="check" size={12} />Installed</span>
-          : <button className="btn small" disabled={busy || !profile?.gpu?.ok || !navigator.onLine}
-              onClick={() => install(entry.key)}>
-              <Icon name="arrowDown" size={13} /> {status.downloaded ? 'Switch' : 'Download'}
-            </button>}
+        {installed && status.using === 'webllm' && <span className="badge shared"><Icon name="check" size={12} />In use</span>}
+        {installed && status.using !== 'webllm' && (
+          <button className="btn small" onClick={() => usePreference('webllm')}><Icon name="check" size={13} /> Use this</button>
+        )}
+        {!installed && (
+          <button className="btn small" disabled={busy || !profile?.gpu?.ok || !navigator.onLine}
+            title={!profile?.gpu?.ok ? profile?.gpu?.why : !navigator.onLine ? 'Connect to the internet to download' : undefined}
+            onClick={() => install(entry.key)}>
+            <Icon name="arrowDown" size={13} /> {status.downloaded ? 'Switch to this' : 'Download'}
+          </button>
+        )}
       </div>
     </li>
   )
@@ -85,19 +91,24 @@ export default function OfflineAI({ className = 'panel' }) {
   const main = CATALOG.filter((e) => !e.extra)
   const extra = CATALOG.filter((e) => e.extra)
 
-  let line
-  if (d.phase === 'checking' || !profile) line = 'Checking what this device can run…'
-  else if (status.using === 'builtin') line = <>Using <b>{builtinName()}</b> — the browser’s own model, so nothing is downloaded into this site.</>
-  else if (d.builtin === 'downloading') line = <>The browser is getting <b>{builtinName()}</b>{d.builtinP ? ` · ${Math.round(d.builtinP * 100)}%` : ''}. Nothing else needs downloading.</>
-  else if (status.downloaded && installed) {
-    const r = resolve(installed, profile.gpu)
-    line = <>Installed: <b>{r.name}</b> ({installed.label}, {gb(r.gb)}) · {status.reason}</>
-  } else if (d.builtin === 'downloadable' && !status.autoOff) line = <>This browser has a built-in model (<b>{builtinName()}</b>). It’s fetched the first time you click on the page.</>
-  else if (status.downloaded) line = <>Installed: <b>{status.name || status.model}</b> · {status.reason}</> // no longer in the list
-  else if (!profile.gpu.ok) line = profile.reason
-  else if (status.autoOff) line = 'Not installed. Automatic download is off for this browser.'
-  else if (d.text) line = d.text
-  else line = `Not installed yet. This device suits the ${profile.reason}.`
+  const when = (ts) => (ts ? new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '')
+  const dlm = installed ? resolve(installed, profile?.gpu) : null
+  const builtinState = d.builtin // available | downloading | downloadable | unavailable | unsupported
+  const builtinLabel = {
+    available: 'Ready on this device', downloading: `The browser is fetching it${d.builtinP ? ` · ${Math.round(d.builtinP * 100)}%` : ''}`,
+    downloadable: 'Available — the browser fetches it when you choose it', unavailable: 'Not available on this device',
+    unsupported: 'This browser has no built-in AI',
+  }[builtinState] || 'Checking…'
+
+  let active
+  if (d.phase === 'checking' || !profile) active = <>Checking what this device can run…</>
+  else if (status.using === 'builtin') active = <><b>{builtinName()}</b> · the browser’s built-in AI · nothing downloaded for it</>
+  else if (status.using === 'webllm') {
+    active = <><b>{dlm?.name || status.name || status.model}</b> · downloaded{dlm ? ` (${installed.label}, ${gb(dlm.gb)})` : ''}</>
+  } else if (busy && target) active = <>Nothing yet — downloading <b>{resolve(target, profile.gpu).name}</b> (see below)</>
+  else if (builtinState === 'downloading') active = <>Nothing yet — the browser is fetching <b>{builtinName()}</b></>
+  else if (!profile.gpu.ok && builtinState !== 'available') active = <>Nothing — {profile.reason}</>
+  else active = <>Nothing yet{status.autoOff ? ' — automatic download is off for this browser' : d.text ? ` — ${d.text}` : ''}</>
 
   return (
     <section className={`${className} offline-ai`}>
@@ -105,7 +116,7 @@ export default function OfflineAI({ className = 'panel' }) {
         <span className={`oa-icon ${status.ready ? 'ok' : ''}`}><Icon name="chip" size={18} /></span>
         <div>
           <h3>Offline AI</h3>
-          <p className="muted">{line}</p>
+          <p className="oa-active"><span className="muted">Answering offline with:</span> {active}</p>
           <p className="muted oa-sub">
             Search model: {status.search ? 'bge-small (34 MB) · ready' : 'not downloaded yet'} · answers and search run in this browser with no internet.
           </p>
@@ -120,19 +131,59 @@ export default function OfflineAI({ className = 'panel' }) {
         </p>
       )}
 
-      {profile?.gpu.ok && (
+      <div className="oa-section">
+        <h4>Browser’s built-in AI</h4>
+        <div className="oa-row">
+          <div className="oa-model-main">
+            <b>{builtinState && builtinState !== 'unsupported' ? builtinName() : 'None'}</b>
+            <span className="muted">{builtinLabel}</span>
+          </div>
+          <div className="oa-model-tags">
+            {status.using === 'builtin' && <span className="badge shared"><Icon name="check" size={12} />In use</span>}
+            {status.using !== 'builtin' && (builtinState === 'available' || builtinState === 'downloadable') && (
+              <button className="btn small" onClick={() => usePreference('builtin')}><Icon name="check" size={13} /> Use browser’s AI</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="oa-section">
+        <h4>Downloaded model</h4>
+        <div className="oa-row">
+          <div className="oa-model-main">
+            <b>{status.downloaded ? (dlm?.name || status.name || status.model) : 'None downloaded'}</b>
+            <span className="muted">
+              {status.downloaded
+                ? [installed && `${installed.label} tier`, dlm && gb(dlm.gb), status.downloadedAt && `downloaded ${when(status.downloadedAt)}`,
+                  status.auto ? 'picked automatically for this device' : 'chosen by you'].filter(Boolean).join(' · ')
+                : profile?.gpu.ok ? `Suggested for this device: ${profile.reason}` : (profile?.gpu.why || '')}
+            </span>
+          </div>
+          <div className="oa-model-tags">
+            {status.downloaded && status.using === 'webllm' && <span className="badge shared"><Icon name="check" size={12} />In use</span>}
+            {status.downloaded && status.using !== 'webllm' && (
+              <button className="btn small" onClick={() => usePreference('webllm')}><Icon name="check" size={13} /> Use this model</button>
+            )}
+            {status.downloaded && !busy && (
+              <button className="btn ghost small" onClick={removeAI}><Icon name="trash" size={13} /> Remove</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="oa-section">
+        <h4>Switch model</h4>
+        {profile && !profile.gpu.ok && <p className="oa-note"><Icon name="info" size={13} /> {profile.gpu.why} Models can’t be downloaded in this browser.</p>}
         <ul className="oa-models">
           {main.map((e) => <ModelRow key={e.key} entry={e} profile={profile} status={status} busy={busy} />)}
         </ul>
-      )}
-      {profile?.gpu.ok && (
         <details className="oa-more">
           <summary>More models</summary>
           <ul className="oa-models">
             {extra.map((e) => <ModelRow key={e.key} entry={e} profile={profile} status={status} busy={busy} />)}
           </ul>
         </details>
-      )}
+      </div>
 
       {profile && (
         <details className="oa-more">
@@ -161,9 +212,6 @@ export default function OfflineAI({ className = 'panel' }) {
           <input type="checkbox" checked={!status.autoOff} onChange={(e) => setAutoDownload(e.target.checked)} />
           Download automatically on this browser
         </label>
-        {status.downloaded && !busy && (
-          <button className="btn ghost small" onClick={removeAI}><Icon name="trash" size={13} /> Remove download</button>
-        )}
       </div>
     </section>
   )

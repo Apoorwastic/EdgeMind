@@ -2,7 +2,19 @@
 // (e.g. the deployed demo with Wi-Fi off). Everything lives in this browser's localStorage,
 // namespaced per device path (/laptop/ and /mobile/ share an origin when deployed).
 
-const NS = `em:${window.location.pathname.replace(/[^/]*$/, '')}:`
+// One link serves every account (edge/gateway.py), so each signed-in account + device gets its own
+// namespace: one person's offline copy is never shown to the next person on this browser.
+const BASE = `em:${window.location.pathname.replace(/[^/]*$/, '')}:`
+let NS = BASE
+export function scopeToAccount(account, device) {
+  NS = account ? `${BASE}${account}/${device || ''}:` : BASE
+}
+
+// The last session this browser saw, so a signed-in browser keeps working offline.
+export const lastSession = {
+  get: () => { try { return JSON.parse(localStorage.getItem(`${BASE}session`)) } catch { return null } },
+  set: (s) => { try { s ? localStorage.setItem(`${BASE}session`, JSON.stringify(s)) : localStorage.removeItem(`${BASE}session`) } catch { /* blocked */ } },
+}
 
 function read(key, fallback) {
   try {
@@ -15,6 +27,13 @@ function read(key, fallback) {
 
 function write(key, value) {
   try { localStorage.setItem(NS + key, JSON.stringify(value)) } catch { /* full or blocked: best effort */ }
+}
+
+// Sign-out: drop everything this browser kept for this account (notes, chats, outbox, cache).
+export function forgetAll() {
+  try {
+    Object.keys(localStorage).filter((k) => k.startsWith(NS) || k === `${BASE}session`).forEach((k) => localStorage.removeItem(k))
+  } catch { /* storage blocked */ }
 }
 
 // ---------------------------------------------------------------- read-through cache of device GETs

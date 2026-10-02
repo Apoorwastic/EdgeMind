@@ -20,6 +20,8 @@
 
   --private: #a78bfa;
   --private-soft: rgba(167, 139, 250, 0.12);
+  --device: #f5c46b; /* This device only */
+  --device-soft: rgba(245, 196, 107, 0.12);
   --shared: #5ee6a0;
   --shared-soft: rgba(94, 230, 160, 0.11);
   --waiting: #f5b454;
@@ -89,6 +91,30 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 /* ---------------------------------------------------------------- boot */
 .boot { height: 100%; display: grid; place-content: center; gap: 16px; justify-items: center; color: var(--text-3); }
 .boot-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--ember); box-shadow: 0 0 24px var(--ember); animation: breathe 1.4s ease-in-out infinite; }
+
+/* sign-in (demo accounts) */
+.login { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
+.login-card {
+  width: min(380px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 30px 26px;
+  border-radius: var(--r); background: var(--glass); border: 1px solid var(--line); backdrop-filter: var(--blur);
+  box-shadow: 0 30px 90px -40px rgba(0, 0, 0, 0.9), 0 0 90px -60px var(--ember);
+}
+.login-card h1 { margin: 4px 0 0; font-size: 22px; letter-spacing: -0.01em; }
+.login-card > p { margin: -6px 0 6px; font-size: 13.5px; }
+.login-card label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.login-card .btn.primary { justify-content: center; height: 42px; margin-top: 4px; }
+.login-logo { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid rgba(255, 122, 47, 0.45); }
+.login-logo i { width: 12px; height: 12px; border-radius: 50%; background: var(--ember); box-shadow: 0 0 18px var(--ember); }
+.login-demo { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.login-demo .row { flex-wrap: wrap; }
+.login-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer;
+}
+.login-chip:hover, .login-chip.on { color: var(--text); border-color: rgba(255, 122, 47, 0.5); background: var(--ember-soft); }
+.brand-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.brand-out { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; border: 1px solid transparent; background: none; color: var(--text-3); cursor: pointer; }
+.brand-out:hover { color: var(--text); border-color: var(--line); background: var(--glass); }
 @keyframes breathe { 50% { transform: scale(1.5); opacity: 0.6; } }
 
 /* ---------------------------------------------------------------- shell */
@@ -542,7 +568,8 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .team-grid-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .team-grid-info b { font-size: 15px; }
 .team-grid-chevron { color: var(--text-3); transform: rotate(180deg); flex: none; }
-.team-add-btn { align-self: flex-start; }
+.team-add { display: flex; flex-direction: column; gap: 10px; }
+.team-add .team-card { max-width: 420px; }
 .team-back { align-self: flex-start; }
 .team-feed-section { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
 .team-feed-section .feed-title { margin: 0; }
@@ -853,3 +880,13 @@ h3 { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: 
 .general-note.team-hint { display: flex; align-items: flex-start; line-height: 1.5; color: var(--text-2); }
 .general-note.team-hint .icon { flex: none; margin-top: 3px; }
 .general-note.team-hint a { color: var(--ember); }
+.oa-active { margin: 2px 0 0; font-size: 14px; line-height: 1.5; }
+.oa-section { display: flex; flex-direction: column; gap: 8px; }
+.oa-section h4 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.oa-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: var(--r-sm); background: var(--glass); border: 1px solid var(--line); }
+
+/* "This device only" notes: the private styling, in gold */
+.badge.private.device, .seg button.active.private.device, .pc.private.device.active { color: var(--device); background: var(--device-soft); }
+.pc.private.device.active { border-color: rgba(245, 196, 107, 0.5); }
+.source.private.device .icon, .mem-chip.private.device > .icon { color: var(--device); }

@@ -39,14 +39,25 @@ for m in "$EMBED_PULL" "${LOCAL_LLM:-qwen2.5:3b}"; do
   fi
 done
 
-start_device() {  # id name kind port
-  log "starting $2 ($1) on :$4"
-  DEVICE_ID="$1" DEVICE_NAME="$2" DEVICE_KIND="$3" PORT="$4" DATA_DIR="$DATA/$1" python -m edge &
-}
-start_device device_a Laptop laptop 8101
-start_device device_b Mobile mobile 8102
-wait_for http://127.0.0.1:8101/api/state
-wait_for http://127.0.0.1:8102/api/state
+# Session cookies are signed with AUTH_SECRET. The code is public, so never run on its default: without
+# one set in the platform's variables, make a random one and keep it with the data (sessions survive
+# restarts when $DATA is a persistent volume; otherwise everyone just signs in again).
+if [ -z "${AUTH_SECRET:-}" ]; then
+  [ -s "$DATA/.auth_secret" ] || head -c 32 /dev/urandom | base64 > "$DATA/.auth_secret"
+  AUTH_SECRET="$(cat "$DATA/.auth_secret")"
+  export AUTH_SECRET
+  log "AUTH_SECRET not set: using a generated one (set it in the platform's variables to keep sessions across redeploys)"
+fi
+
+# Every device in deploy/demo.json runs inside ONE process (edge/host.py): Laptop :8101, Mobile :8102,
+# the demo accounts :8111-8118 and their sign-in address :8100. Python, the libraries and the search
+# model load once (~470 MB for all ten devices, instead of ~270 MB per device).
+# DEMO_ACCOUNTS=0 runs only Laptop and Mobile.
+log "starting the devices"
+EDGEMIND_DATA="$DATA" python -m edge.host &
+for port in $(python -c "import json; d=json.load(open('deploy/demo.json'))['devices']; import os; acc=os.getenv('DEMO_ACCOUNTS','1')=='1'; print(' '.join(str(x['port']) for x in d if acc or not x.get('account')) + (' 8100' if acc else ''))"); do
+  wait_for "http://127.0.0.1:$port/api/session"
+done
 
 # A fresh deployment gets demo notes so visitors don't land on an empty app.
 if [ "${SEED_DEMO:-1}" = "1" ] && [ ! -f "$DATA/.seeded" ]; then
@@ -54,10 +65,17 @@ if [ "${SEED_DEMO:-1}" = "1" ] && [ ! -f "$DATA/.seeded" ]; then
   python scripts/seed_demo.py --scenario "${SEED_SCENARIO:-home}" && touch "$DATA/.seeded" || log "seeding failed"
 fi
 
+# The accounts and teams are (re)checked on every start: the script only adds what's missing, so a
+# person or note added to deploy/demo.json or the script shows up after the next deploy.
+if [ "${DEMO_ACCOUNTS:-1}" = "1" ] && [ "${SEED_DEMO:-1}" = "1" ]; then
+  log "seeding the demo accounts and teams"
+  python scripts/seed_accounts.py || log "seeding the accounts failed"
+fi
+
 log "starting gateway on :${PORT:-7860}"
 caddy run --config deploy/Caddyfile --adapter caddyfile &
 
-log "EdgeMind is up: open / for the demo, /laptop/ or /mobile/ for one device"
+log "EdgeMind is up: open / for the demo, /laptop/ or /mobile/ for one device, /app/ to sign in to the team accounts"
 wait -n
 log "a process exited; stopping so the platform restarts the container"
 exit 1

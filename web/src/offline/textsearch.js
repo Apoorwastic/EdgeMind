@@ -9,12 +9,17 @@ const STOP = new Set(('a an the is are was were be been am i me my mine you your
   'this that these those there here from about as into than then so if any some all tell give please thanks much many ' +
   'get got have has had s t').split(' '))
 
-// Might lean on the previous question: "What does she like?", "And the Wi-Fi password?", "His number?".
-// Only a hint: callers still check that the question alone doesn't already find a strong answer.
-export const isFollowup = (q) =>
-  /\b(he|she|him|her|his|hers|it|its|they|them|their|theirs|that|this|those|these|there|same|one)\b/i.test(q) ||
-  /^\s*(and|also|what about|how about|what else|then|so|but)\b/i.test(q) ||
-  words(q).filter((w) => !STOP.has(w)).length <= 1
+// How strongly a question leans on the previous one (same rules as edge/search.py followup_kind):
+//  'pronoun' — he/she/his/it/they point back ("What's his number?" after "Who is the plumber?"): always search
+//              together with the previous question (alone, "his number" finds Dad's emergency number)
+//  'hint'    — "And the Wi-Fi password?", "that one", a one-word question: only when the question alone
+//              finds no strong match
+export function followupKind(q) {
+  if (/\b(he|she|him|her|his|hers|it|its|they|them|their|theirs)\b/i.test(q)) return 'pronoun'
+  if (/\b(that|this|those|these|there|same|one)\b/i.test(q) || /^\s*(and|also|what about|how about|what else|then|so|but)\b/i.test(q) ||
+      words(q).filter((w) => !STOP.has(w)).length <= 1) return 'hint'
+  return null
+}
 
 // Asks about the user's own things ("my", "our"): only their notes can answer, never general knowledge.
 // "I"/"me" don't count: "How do I change a tyre?" is a general question.

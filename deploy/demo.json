@@ -1,0 +1,29 @@
+{
+  "_about": "Demo people, their devices and teams. Read by edge/auth.py (sign-in), edge/host.py (runs every device in one process), scripts/seed_accounts.py (teams + notes). Passwords are demo values.",
+  "accounts": [
+    { "id": "rakshit", "name": "Rakshit", "password": "rakshit123" },
+    { "id": "apoorwa", "name": "Apoorwa", "password": "apoorwa123" },
+    { "id": "akhila", "name": "Akhila", "password": "akhila123" },
+    { "id": "neha", "name": "Neha", "password": "neha123" },
+    { "id": "karan", "name": "Karan", "password": "karan123" },
+    { "id": "meera", "name": "Meera", "password": "meera123" },
+    { "id": "dev", "name": "Dev", "password": "dev123" }
+  ],
+  "devices": [
+    { "id": "device_a", "name": "Laptop", "kind": "laptop", "port": 8101 },
+    { "id": "device_b", "name": "Mobile", "kind": "mobile", "port": 8102 },
+    { "id": "rakshit", "name": "Rakshit", "kind": "laptop", "port": 8111, "account": "rakshit" },
+    { "id": "apoorwa", "name": "Apoorwa", "kind": "laptop", "port": 8112, "account": "apoorwa" },
+    { "id": "akhila", "name": "Akhila", "kind": "laptop", "port": 8113, "account": "akhila" },
+    { "id": "apoorwa_phone", "name": "Apoorwa's phone", "kind": "mobile", "port": 8114, "account": "apoorwa" },
+    { "id": "neha", "name": "Neha", "kind": "laptop", "port": 8115, "account": "neha" },
+    { "id": "karan", "name": "Karan", "kind": "laptop", "port": 8116, "account": "karan" },
+    { "id": "meera", "name": "Meera", "kind": "laptop", "port": 8117, "account": "meera" },
+    { "id": "dev", "name": "Dev", "kind": "laptop", "port": 8118, "account": "dev" }
+  ],
+  "teams": [
+    { "name": "Thunderbolts", "admin": "rakshit", "members": ["apoorwa", "apoorwa_phone", "akhila"] },
+    { "name": "Night Owls", "admin": "neha", "members": ["karan", "akhila"] },
+    { "name": "Pixel Pirates", "admin": "meera", "members": ["dev"] }
+  ]
+}

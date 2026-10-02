@@ -3,7 +3,7 @@
 // browser's built-in one when it has it (nothing to download), otherwise WebLLM on WebGPU, downloaded once
 // while online — automatically, sized to this device — and then loaded from the browser's cache.
 import { aiPrefs, chats, logActivity } from './local.js'
-import { Vocabulary, isFollowup, isPersonal, words } from './textsearch.js'
+import { Vocabulary, followupKind, isPersonal, words } from './textsearch.js'
 
 // Same prompts as the device (edge/llm.py), so answers read the same online and offline.
 const SYSTEM =
@@ -38,7 +38,7 @@ const NOTES_PER_PASS = 3
 // 10/11 at 6.0 s, Qwen3.5 2B 8/11 at 7.0 s, Qwen2.5 3B 10/11 at 12.2 s. Qwen2.5 3B is also the model the
 // device runs through Ollama, so "Best" answers like the device does online.
 export const CATALOG = [
-  { key: 'phone', label: 'Phone', name: 'Gemma 3 1B', gb: 0.56, hint: 'Fastest and smallest. For phones and older laptops.',
+  { key: 'phone', label: 'Substandard', name: 'Gemma 3 1B', gb: 0.56, hint: 'Fastest and smallest. For phones and older laptops.',
     f16: 'gemma3-1b-it-q4f16_1-MLC', f32: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', f32Name: 'Llama 3.2 1B', f32Gb: 0.7 },
   { key: 'standard', label: 'Standard', name: 'Qwen2.5 1.5B', gb: 0.87, hint: 'Accurate answers on most laptops.',
     f16: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', f32: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
@@ -119,7 +119,7 @@ export async function builtinState() {
 
 // The browser only fetches its model after a click or key press on the page, so start it on the first one.
 let builtinStart = null
-function startBuiltinOnGesture() {
+function startBuiltinOnGesture(now = false) {
   builtinStart ||= new Promise((done) => {
     const go = () => {
       off()
@@ -134,9 +134,20 @@ function startBuiltinOnGesture() {
         .catch((e) => { console.warn('built-in model unavailable', e); done(false) })
     }
     const off = () => ['pointerdown', 'keydown'].forEach((t) => window.removeEventListener(t, go, true))
-    ;['pointerdown', 'keydown'].forEach((t) => window.addEventListener(t, go, true))
+    if (now) go() // called from a click (Admin → "Use browser's AI"): that click is the gesture the browser needs
+    else ['pointerdown', 'keydown'].forEach((t) => window.addEventListener(t, go, true))
   })
   return builtinStart
+}
+
+// Admin: which of the two answers offline. 'builtin' = the browser's own model, 'webllm' = the downloaded one.
+// Remembered per browser; an explicit choice always beats the automatic one.
+export function usePreference(which) {
+  aiPrefs.set({ ...(aiPrefs.get() || {}), prefer: which })
+  if (which === 'builtin' && (dl.builtin === 'downloadable' || dl.builtin === 'downloading')) {
+    startBuiltinOnGesture(true).then((ok) => { if (!ok) { builtinFailed = true; setDl({ builtin: 'unavailable' }) } })
+  }
+  setDl({})
 }
 
 // Same messages as WebLLM gets: everything but the question becomes the session's opening prompts.
@@ -332,8 +343,13 @@ export const downloads = {
 export function aiStatus() {
   const p = aiPrefs.get()
   const builtin = dl.builtin === 'available'
-  const using = p?.model && (!p.auto || !builtin) ? 'webllm' : builtin ? 'builtin' : null
+  let using
+  if (p?.prefer === 'webllm' && p?.model) using = 'webllm'
+  else if (p?.prefer === 'builtin' && builtin) using = 'builtin'
+  else using = p?.model && (!p.auto || !builtin) ? 'webllm' : builtin ? 'builtin' : null
   return { downloaded: !!p?.model, model: p?.model || null, tier: p?.tier || null, auto: !!p?.auto,
+    prefer: p?.prefer || null, downloadedAt: p?.model ? p.ts || null : null,
+    builtinModel: dl.builtin && dl.builtin !== 'unsupported' ? builtinName() : null,
     reason: p?.reason || null, search: searchModelReady(), loaded: !!engine, autoOff: !!p?.autoOff,
     builtin: dl.builtin || null, ready: !!using, using,
     name: using === 'builtin' ? builtinName() : using ? p.name || entryFor(p.model)?.name || p.model : null }
@@ -429,6 +445,7 @@ async function doInstall(key, { auto = false, reason } = {}) {
       engineP = Promise.resolve(eng)
       if (prev && prev !== id) await deleteModelAllInfoInCache(prev).catch(() => {})
       aiPrefs.set({ ...(aiPrefs.get() || {}), model: id, tier: key, name, auto, pending: null,
+        ...(auto ? {} : { prefer: 'webllm' }),
         reason: reason || (auto ? 'picked automatically' : 'chosen in Admin'), ts: Date.now() })
       retries = 0
       logActivity('system', `Offline AI ready in this browser — ${name} (${auto ? 'downloaded automatically' : 'chosen in Admin'})`)
@@ -571,7 +588,7 @@ async function check({ first = false } = {}) {
   const builtin = await builtinState()
   setDl({ builtin })
   if (builtin === 'available') {
-    if (p?.model && p.auto) await dropWebLLM('the browser’s built-in model is used instead')
+    if (p?.model && p.auto && p.prefer !== 'webllm') await dropWebLLM('the browser’s built-in model is used instead')
     else if (p?.pending?.auto) aiPrefs.set({ ...p, pending: null })
     p = aiPrefs.get()
     if (!p?.model && !p?.pending) {
@@ -677,9 +694,14 @@ function buildMessages(q, hits, history, general, weak = false) {
 // "sunflower2024"): a small model garbled something, so the note itself is shown next to the answer.
 export function unsupported(answer, notes) {
   const source = notes.map((n) => n.text.toLowerCase()).join(' ')
+  const noteNumbers = new Set(source.match(/\d+/g) || [])
   return (answer.toLowerCase().match(/[a-z0-9]*\d[a-z0-9:-]*/g) || [])
     .map((tok) => tok.replace(/[.:]+$/, '').replace(/^(\d+)(st|nd|rd|th)$/, '$1')) // "18th" is the note's "18"
-    .filter((tok) => tok.replace(/\D/g, '').length >= 2 && !source.includes(tok))
+    .filter((tok) => (/^\d+$/.test(tok)
+      // A plain number must be one of the note's numbers, single digits included: Gemma answered grandma's
+      // "3 November" with "November 1st".
+      ? !noteNumbers.has(tok)
+      : tok.replace(/\D/g, '').length >= 2 && !source.includes(tok)))
 }
 
 // "Can the dog have chocolate?" → "Yes" while the note says "never give him chocolate": small models
@@ -713,7 +735,8 @@ export async function ask(q, cid, onEvent, signal, { memories, history, why = 'd
   // question — only when the question alone found no strong match (same rule as the device).
   const prev = [...history].reverse().find((t) => t.role === 'user')
   let followup = null
-  if (prev && isFollowup(q) && !timing.fast && !hits.some((h) => h.relevant && h.semantic >= EMBED.strong)) {
+  const kind = prev ? followupKind(q) : null
+  if (kind === 'pronoun' || (kind === 'hint' && !timing.fast && !hits.some((h) => h.relevant && h.semantic >= EMBED.strong))) {
     const second = await search(`${prev.text} ${q}`, memories)
     if (second.hits.some((h) => h.relevant)) {
       ;({ hits } = second)
@@ -746,7 +769,7 @@ export async function ask(q, cid, onEvent, signal, { memories, history, why = 'd
   let stopped = false
   const save = () => {
     const ts = Date.now()
-    const isPrivate = used.some((h) => h.sensitivity === 'private')
+    const isPrivate = used.some((h) => h.sensitivity !== 'shareable')
     chats.append(cid,
       { cid, role: 'user', text: q, ts, private: isPrivate, browser: true },
       { cid, role: 'assistant', text: answer, ts, route, used: used.map((h) => h.mem_id), private: isPrivate, mode,
@@ -755,7 +778,10 @@ export async function ask(q, cid, onEvent, signal, { memories, history, why = 'd
 
   const generate = async (eng, notes, isGeneral = general) => {
     const asked = timing.searched_for || q // spelling-corrected question
-    const messages = buildMessages(followup ? `Earlier question: "${followup.text}"\nFollow-up question: ${asked}` : asked,
+    // Small models given "Earlier question … / Follow-up question …" tend to answer the earlier one (Gemma: "What
+    // does she like?" → grandma's birthday). New question first, the earlier one only as context for "she"/"his".
+    const messages = buildMessages(followup ? `${asked}\n(Answer only this question. "${followup.text}" was asked just before, ` +
+      'so words like she, he, his, it or they refer to what it was about.)' : asked,
       notes, history, isGeneral, weak && !isGeneral)
     const loose = isGeneral || weak // may be a longer general answer
     const show = (raw) => {
@@ -847,11 +873,21 @@ export async function ask(q, cid, onEvent, signal, { memories, history, why = 'd
   const best = relevant[0] || used[0]
   // On a weak match only when the note holds at least half the question's words ("plumber" for "my plumbre
   // number"); "my car's licence plate" vs the car-insurance note shares just "car", so that refusal stands.
-  if (route === 'local' && mode === 'memory' && best && REFUSAL.test(answer) &&
-      (!weak || vocab.covers(timing.searched_for || q, best.mem_id, 0.5))) {
+  // A follow-up answered by repeating the previous answer ("What does she like?" → "Grandma's birthday is
+  // 3 November." again, from Gemma 3 1B): the note itself holds the new part ("she loves orchids").
+  const prevAnswer = followup ? [...history].reverse().find((t) => t.role === 'assistant')?.text || '' : ''
+  const sameWords = (a, b) => {
+    const A = new Set(words(a))
+    const B = new Set(words(b))
+    return A.size && B.size ? [...A].filter((w) => B.has(w)).length / Math.min(A.size, B.size) : 0
+  }
+  const repeated = followup && prevAnswer && sameWords(answer, prevAnswer) >= 0.8
+  if (route === 'local' && mode === 'memory' && best && (repeated || (REFUSAL.test(answer) &&
+      (!weak || vocab.covers(timing.searched_for || q, best.mem_id, 0.5))))) {
     const note = best
     answer = `Here’s your note: “${note.text}”`
-    onEvent({ type: 'reroute', route, reason: `${reason} · the model declined, so the matching note is shown`, used: [note.mem_id] })
+    onEvent({ type: 'reroute', route, used: [note.mem_id],
+      reason: `${reason} · ${repeated ? 'the model repeated its previous answer' : 'the model declined'}, so the matching note is shown` })
     onEvent({ type: 'token', t: answer })
     used = [note]
   }

@@ -235,6 +235,56 @@ The **Team feed** lists everything your devices have shared, newest first, showi
 
 ![Admin shared store](docs/screenshots/admin-shared.png)
 
+### Demo accounts: seven people, three teams, one link
+
+Next to Laptop and Mobile, the demo has seven **accounts** in three teams. Everyone signs in at **one address**: http://localhost:8100 locally, or `/app/` (or `/login`) when deployed.
+
+| Team | Members (password = name + `123`, e.g. `neha123`) |
+|---|---|
+| **Thunderbolts** | Rakshit (admin), Apoorwa (laptop **and** phone), Akhila |
+| **Night Owls** | Neha (admin), Karan, Akhila |
+| **Pixel Pirates** | Meera (admin), Dev |
+
+Akhila is in two teams. Each of her Team notes goes to one team, so Rakshit never sees her Night Owls note.
+
+People, devices and teams are all defined in **`deploy/demo.json`**. To add someone, add an account, a device with a free port, and the team they're in. Then add their notes in `scripts/seed_accounts.py`. Deployed, the seed runs on every start and only adds what's missing.
+
+The login page has one-click demo buttons (`DEMO_HINTS=0` hides them). For Apoorwa, it also asks whether this browser is her laptop or her phone. The sign-out arrow sits next to the name.
+
+**One process for every device (`edge/host.py`).** Each device is still its own EdgeMind device: its own settings, Qdrant Edge shard, sync loop, vault and port. They are loaded as separate copies of `edge/app.py` inside one Python process. So Python, the libraries and the search model load once:
+
+| | Memory |
+|---|---|
+| All 10 devices together, in one process | ~470 MB |
+| One device per process (the old way) | ~270 MB **each** |
+
+The devices share one connectivity check, since they're on the same machine. `DEMO_ACCOUNTS=0` runs only Laptop and Mobile.
+
+**How sign-in works.** The sign-in address (part of `edge/host.py`) serves the app and checks the signed session cookie. It then hands each request straight to the device the cookie names, inside the same process, so streamed answers and live events pass through untouched. The device checks the session again on every request. The browser's offline copy is kept separately per account, and signing out deletes it.
+
+**Three levels for every note:**
+
+| Level | Where it's stored | Who can read it |
+|---|---|---|
+| **This device** | Only in this device's Qdrant Edge shard, on its own disk. It is never sent anywhere, not even encrypted | You, on this device |
+| **Private** | The Qdrant Edge shard on each of your devices, plus an encrypted copy in your vault collection on the Qdrant Server (`…_vault_<account>`) | You, on your own devices |
+| **Team** | Every device in the team, through the team's collection | Everyone in the team |
+
+**The vault (`edge/vault.py`).** Signing in on a device derives a key from your password with scrypt. The key is saved in that device's data folder and never sent anywhere. Private notes are encrypted with AES-256-GCM before they leave. The server stores only the id, revision, timestamps, which device wrote the note, and the ciphertext. It gets no text and no vectors, because embeddings leak meaning. Each device decrypts the note and builds the search vectors itself. Other accounts have their own vaults and can't decrypt yours.
+
+The privacy audit checks both rules:
+- "This device" notes appear in no outbound request and in no server collection.
+- Private notes appear only in your own vault, and only as ciphertext.
+
+Note that on the deployed demo, the "device" is the container running on Railway. "This device" there means that server's disk. Run it locally to keep everything on your own machine.
+
+`scripts/seed_accounts.py` fills the accounts (`--reset` starts over):
+- Everyone sees the 12 Thunderbolts notes and their own Private notes.
+- Apoorwa's laptop and phone share her 4 Private notes. One of them was written on the phone and arrives decrypted on the laptop.
+- Each device has one "This device" note (a PIN or lock code) that exists nowhere else.
+
+These are demo accounts, not production authentication. The session cookie is signed with `AUTH_SECRET`. When it isn't set, the container generates a random one and keeps it in the data folder, because the default is public. Set it in Railway's variables so sessions survive redeploys.
+
 ### Edits on two devices at once
 
 Every shared note has a revision number, and each device remembers the revision it last synced. If both devices edit the same note while apart, the later edit wins, with ties broken by device id. The other version isn't thrown away: *Admin › Conflicts* shows both versions, who wrote each and when, and has a one-click **Restore**.

@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { ago, api, deviceName } from './api.js'
 import { Icon } from './icons.jsx'
 import TeamPicker from './TeamPicker.jsx'
+import { LEVELS, isPersonal, level } from './privacy.js'
 
 function StatusBadge({ m, teams }) {
-  if (m.sensitivity === 'private') return <span className="badge private"><Icon name="lock" size={12} />Only me</span>
+  if (isPersonal(m)) return <span className={`badge ${level(m).cls}`}><Icon name={level(m).icon} size={12} />{level(m).label}</span>
   if (!m.team_id) return <span className="badge warn"><Icon name="warn" size={12} />Needs a team</span>
   if (m.synced) {
     const t = teams.find((x) => x.id === m.team_id)
@@ -15,7 +16,13 @@ function StatusBadge({ m, teams }) {
 
 // Plain-words answer to "where does this note live?"
 function whereItLives(m, device, teams) {
-  if (m.sensitivity === 'private') return `Stored only on this ${device.name}. It never leaves this device.`
+  if (m.sensitivity === 'device') return `Stored only on this ${device.name}. It never leaves it, not even encrypted.`
+  if (m.sensitivity === 'private') {
+    if (!device.account) return `Stored only on this ${device.name}. It never leaves this device.`
+    return m.vault_synced
+      ? `Only you can read it: on this ${device.name}, and encrypted on your other devices.`
+      : 'Only you can read it. It goes to your other devices, encrypted, at the next sync.'
+  }
   if (!m.team_id) return 'It’s tagged Team, but needs a team picked before it can sync.'
   const t = teams.find((x) => x.id === m.team_id)
   const who = t ? t.name : 'your team'
@@ -31,7 +38,7 @@ function NoteCard({ m, device, teams, onChanged, old }) {
   const [text, setText] = useState(m.text)
   const [err, setErr] = useState(null)
   const foreign = m.origin && m.origin !== device.id
-  const priv = m.sensitivity === 'private'
+  const priv = isPersonal(m)
 
   const run = async (fn) => {
     setErr(null)
@@ -97,6 +104,13 @@ function NoteCard({ m, device, teams, onChanged, old }) {
                 <Icon name={priv ? 'users' : 'lock'} size={14} /> {priv ? 'Share' : 'Make private'}
               </button>
             )}
+            {priv && device.account && (
+              <button className="btn ghost small"
+                onClick={() => run(() => api.editMemory(m.mem_id, { sensitivity: m.sensitivity === 'device' ? 'private' : 'device' }))}
+                title={m.sensitivity === 'device' ? 'Sync it, encrypted, to your other devices' : 'Keep it on this device only, never synced'}>
+                <Icon name={m.sensitivity === 'device' ? 'lock' : 'chip'} size={14} /> {m.sensitivity === 'device' ? 'Private' : 'This device only'}
+              </button>
+            )}
             {!priv && !m.team_id && (
               <button className="btn ghost small" onClick={() => setPickingTeam(true)}>
                 <Icon name="users" size={14} /> Pick a team
@@ -130,7 +144,7 @@ function NewNote({ onSaved, onCancel, teams }) {
   const pickTeam = (v) => {
     setSensitivity(v)
     if (v === 'shareable' && teams.length === 1) setTeamId(teams[0].id)
-    else if (v === 'private') setTeamId(null)
+    else if (v !== 'shareable') setTeamId(null)
   }
   const save = async (e) => {
     e.preventDefault()
@@ -144,9 +158,11 @@ function NewNote({ onSaved, onCancel, teams }) {
         placeholder="What do you want to remember?" />
       <div className="new-note-bar">
         <div className="seg" role="radiogroup" aria-label="Who can see this note">
-          <button type="button" className={sensitivity === 'private' ? 'active private' : ''} onClick={() => pickTeam('private')}>
-            <Icon name="lock" size={14} /> Only me
-          </button>
+          {['device', 'private'].map((k) => (
+            <button key={k} type="button" className={sensitivity === k ? `active ${LEVELS[k].cls}` : ''} onClick={() => pickTeam(k)}>
+              <Icon name={LEVELS[k].icon} size={14} /> {LEVELS[k].label}
+            </button>
+          ))}
           <button type="button" className={sensitivity === 'shareable' ? 'active shared' : ''} onClick={() => pickTeam('shareable')}>
             <Icon name="users" size={14} /> Team
           </button>
@@ -176,14 +192,16 @@ export default function NotesView({ memories, state, onChanged }) {
   const older = memories.filter((m) => m.superseded_by)
   const FILTERS = [
     ['all', 'All', current.length],
-    ['private', 'Only me', current.filter((m) => m.sensitivity === 'private').length],
+    ['private', 'Private', current.filter((m) => m.sensitivity === 'private').length],
+    ['device', 'This device', current.filter((m) => m.sensitivity === 'device').length],
     ['shared', 'Team', current.filter((m) => m.sensitivity === 'shareable').length],
     ['waiting', 'Waiting', current.filter((m) => m.sensitivity === 'shareable' && !m.synced).length],
-  ].filter(([k, , n]) => k !== 'waiting' || n > 0)
+  ].filter(([k, , n]) => !['waiting', 'device'].includes(k) || n > 0)
   const active = FILTERS.some(([k]) => k === filter) ? filter : 'all'
   const match = (m) =>
     active === 'all' ? true
       : active === 'private' ? m.sensitivity === 'private'
+      : active === 'device' ? m.sensitivity === 'device'
         : active === 'shared' ? m.sensitivity === 'shareable'
           : m.sensitivity === 'shareable' && !m.synced
 

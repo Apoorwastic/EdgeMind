@@ -119,6 +119,30 @@ class CloudStore:
             points=[models.PointStruct(id=point_id(rec["mem_id"]), vector={"dense": dense, "bm25": sparse}, payload=payload)],
         )
 
+    async def push_sealed(self, payload: dict) -> None:
+        """Upload one encrypted Private note to the account's vault (edge/vault.py). Refuses anything
+        that isn't a sealed payload: no text field, no fields outside the allow-list, no vectors."""
+        from .vault import SEALED_FIELDS
+        if not payload.get("sealed") or not payload.get("ct") or set(payload) - set(SEALED_FIELDS):
+            self.bus.activity("privacy", f"Blocked: unsealed vault payload for {payload.get('mem_id')}", level="alert")
+            raise PrivacyViolation(f"refusing to upload unsealed record {payload.get('mem_id')}")
+        await self.ensure()
+        self.gate.egress(self.url, "vault-push", [payload["mem_id"]], len(payload["ct"]))
+        await self.client.upsert(self.collection, points=[models.PointStruct(id=point_id(payload["mem_id"]), vector={}, payload=payload)])
+
+    async def sealed_index(self) -> dict[str, dict]:
+        """For the privacy audit: which vault points exist, and whether each one is still ciphertext only."""
+        await self.ensure()
+        self.gate.egress(self.url, "list-index")
+        out, offset = {}, None
+        while True:
+            pts, offset = await self.client.scroll(self.collection, limit=512, offset=offset,
+                                                   with_payload=["mem_id", "text", "sealed", "deleted"], with_vectors=True)
+            for p in pts:
+                out[p.payload["mem_id"]] = {**p.payload, "has_vectors": bool(p.vector)}
+            if offset is None:
+                return out
+
     async def get(self, mem_id: str) -> dict | None:
         await self.ensure()
         self.gate.egress(self.url, "read")

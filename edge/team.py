@@ -14,6 +14,7 @@ everything else keeps working offline from the cached copy in `team.json`. Only 
 names go into the registry, never note content. There is no authentication: the invite code is
 the only key (out of scope for the hackathon).
 """
+import asyncio
 import json
 import random
 import time
@@ -54,6 +55,9 @@ class TeamManager:
     def __init__(self, client: AsyncQdrantClient, url: str, prefix: str, device_id: str, device_name: str,
                  gate: NetworkGate, bus: EventBus, path: Path, suffix: str = ""):
         self.client = client
+        # Leaving a team and the sync's heartbeat for it take turns: a heartbeat that started before the
+        # leave would otherwise write the membership back (on the server and here) after it.
+        self._locks: dict[str, asyncio.Lock] = {}
         self.suffix = suffix  # e.g. "_d384": collections hold vectors of one size only, so a new size gets its own
         self.url = url
         self.prefix = prefix
@@ -177,7 +181,14 @@ class TeamManager:
         self.bus.activity("team", f"Joined team “{team['name']}” ({len(members)} members)")
         return self.view(team["team_id"])
 
+    def _lock(self, team_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(team_id, asyncio.Lock())
+
     async def leave(self, team_id: str) -> dict | None:
+        async with self._lock(team_id):
+            return await self._leave(team_id)
+
+    async def _leave(self, team_id: str) -> dict | None:
         """Drop this device from one team. Works offline too: the registry entry is removed if reachable."""
         team = self.get(team_id)
         if not team:
@@ -227,6 +238,10 @@ class TeamManager:
         return valid, removed
 
     async def _refresh_one(self, team_id: str) -> dict | None:
+        async with self._lock(team_id):
+            return await self._heartbeat(team_id)
+
+    async def _heartbeat(self, team_id: str) -> dict | None:
         team = self.get(team_id)
         if not team:
             return None

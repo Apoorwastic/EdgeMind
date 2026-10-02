@@ -46,9 +46,17 @@ PENDING = Filter(must=[FieldCondition("sync_state", match=MatchValue("queued"))]
 UNASSIGNED = Filter(must=[FieldCondition("sync_state", match=MatchValue("unassigned"))])
 
 
+# Private notes (edge/vault.py) sync encrypted to the account's other devices: "vault" = waiting to go
+# up, "private" = in the vault already. "device" notes ("This device only") never sync at all.
+VAULT_PENDING = Filter(must=[FieldCondition("sync_state", match=MatchValue("vault"))])
+PRIVATE = Filter(must=[FieldCondition("sensitivity", match=MatchValue("private"))])
+
+
 def sync_state(rec: dict) -> str:
-    if rec.get("sensitivity") != "shareable":
-        return "private"
+    if rec.get("sensitivity") == "device":
+        return "device"
+    if rec.get("sensitivity") == "private":
+        return "private" if rec.get("vault_synced") else "vault"
     if rec.get("synced"):
         return "synced"
     return "unassigned" if rec.get("team_id") is None else "queued"
@@ -113,7 +121,7 @@ class LocalMemory:
 
     def set_fields(self, mem_id: str, fields: dict[str, Any]) -> None:
         with self.lock:
-            if "synced" in fields or "sensitivity" in fields or "team_id" in fields:
+            if {"synced", "sensitivity", "team_id", "vault_synced"} & set(fields):
                 fields = {**fields, "sync_state": sync_state({**(self.get(mem_id) or {}), **fields})}
             self.shard.update(UpdateOperation.set_payload([point_id(mem_id)], fields))
             self.shard.flush()
@@ -152,6 +160,13 @@ class LocalMemory:
         """Queued shareable records, scoped to one team (or every team if team_id is omitted)."""
         return self.all(pending_push_filter(team_id))
 
+    def pending_vault(self) -> list[dict]:
+        """Private notes not yet in the account's vault (new, edited, or the vault lost them)."""
+        return self.all(VAULT_PENDING)
+
+    def private_all(self) -> list[dict]:
+        return self.all(PRIVATE)
+
     def shared_for_team(self, team_id: str) -> list[dict]:
         """This device's and others' shareable records belonging to one specific team.
 
@@ -171,6 +186,7 @@ class LocalMemory:
         return {
             "total": self.count(),
             "private": c("private"),
+            "device": c("device"),
             "shareable": c("shareable"),
             "pending": self.count(PENDING),
             "unassigned": self.count(UNASSIGNED),

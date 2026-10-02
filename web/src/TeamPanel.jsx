@@ -51,34 +51,52 @@ function NoTeam({ online }) {
   )
 }
 
-// A second (or third, ...) team, added from the grid rather than the empty state above.
+// Another team, added beside the ones this device is already in (single-team page and the grid).
+// Two buttons; each opens just its own form.
 function AddTeam({ online }) {
-  const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState(null) // null | 'create' | 'join'
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const { busy, error, run } = useAction()
-  if (!open) {
-    return (
-      <button className="btn ghost team-add-btn" disabled={!online} onClick={() => setOpen(true)}>
-        <Icon name="plus" size={14} /> Create or join another team
-      </button>
-    )
-  }
+  const done = (fn) => run(async () => { await fn(); setMode(null); setName(''); setCode('') })
   return (
-    <div className="team-cards">
-      <form className="team-card" onSubmit={(e) => { e.preventDefault(); run(() => api.createTeam(name.trim())) }}>
-        <span className="team-card-icon create"><Icon name="plus" size={20} strokeWidth={2} /></span>
-        <b>Create a team</b>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Team name" maxLength={40} />
-        <button className="btn primary" disabled={!online || busy || !name.trim()}>Create team</button>
-      </form>
-      <form className="team-card" onSubmit={(e) => { e.preventDefault(); run(() => api.joinTeam(code.trim())) }}>
-        <span className="team-card-icon join"><Icon name="link" size={20} strokeWidth={2} /></span>
-        <b>Join a team</b>
-        <input className="code-input" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="ABC-123" maxLength={8} />
-        <button className="btn" disabled={!online || busy || code.replace(/[^A-Z0-9]/g, '').length !== 6}>Join team</button>
-      </form>
+    <div className="team-add">
+      {!mode && (
+        <div className="row gap">
+          <button className="btn small" disabled={!online} onClick={() => setMode('create')}>
+            <Icon name="plus" size={14} /> Create a team
+          </button>
+          <button className="btn small" disabled={!online} onClick={() => setMode('join')}>
+            <Icon name="link" size={14} /> Join a team
+          </button>
+          {!online && <span className="muted small">Connect to create or join a team.</span>}
+        </div>
+      )}
+      {mode === 'create' && (
+        <form className="team-card" onSubmit={(e) => { e.preventDefault(); done(() => api.createTeam(name.trim())) }}>
+          <span className="team-card-icon create"><Icon name="plus" size={20} strokeWidth={2} /></span>
+          <b>Create a team</b>
+          <span className="muted small">You become its admin and get an invite code.</span>
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Team name" maxLength={40} />
+          <div className="row gap">
+            <button className="btn primary" disabled={!online || busy || !name.trim()}>Create team</button>
+            <button type="button" className="btn ghost" onClick={() => setMode(null)}>Cancel</button>
+          </div>
+        </form>
+      )}
+      {mode === 'join' && (
+        <form className="team-card" onSubmit={(e) => { e.preventDefault(); done(() => api.joinTeam(code.trim())) }}>
+          <span className="team-card-icon join"><Icon name="link" size={20} strokeWidth={2} /></span>
+          <b>Join a team</b>
+          <span className="muted small">Enter the invite code from the team admin.</span>
+          <input autoFocus className="code-input" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder="ABC-123" maxLength={8} />
+          <div className="row gap">
+            <button className="btn primary" disabled={!online || busy || code.replace(/[^A-Z0-9]/g, '').length !== 6}>Join team</button>
+            <button type="button" className="btn ghost" onClick={() => setMode(null)}>Cancel</button>
+          </div>
+        </form>
+      )}
       {error && <p className="team-error"><Icon name="warn" size={13} /> {error}</p>}
     </div>
   )
@@ -129,7 +147,7 @@ function FeedItem({ r, me }) {
   )
 }
 
-function TeamDetail({ team, online, me, admin, cloud, memories = [], onBack }) {
+function TeamDetail({ team, online, me, admin, cloud, memories = [], onBack, canAdd = false }) {
   const { busy, error, run } = useAction()
   const [copied, setCopied] = useState(false)
   const [renaming, setRenaming] = useState(null)
@@ -269,6 +287,8 @@ function TeamDetail({ team, online, me, admin, cloud, memories = [], onBack }) {
       )}
       {error && <p className="team-error"><Icon name="warn" size={13} /> {error}</p>}
 
+      {canAdd && <AddTeam online={online} />}
+
       {records !== null && (
         <section className="team-feed-section">
           <div className="panel-head">
@@ -306,7 +326,7 @@ export default function TeamPanel({ state, admin = false, cloud, memories = [], 
   useEffect(() => { if (shown) onSelect?.(shown) }, [shown]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!teams.length) return <NoTeam online={online} />
-  if (teams.length === 1) return <TeamDetail team={teams[0]} online={online} me={me} admin={admin} cloud={cloud} memories={memories} />
+  if (teams.length === 1) return <TeamDetail team={teams[0]} online={online} me={me} admin={admin} cloud={cloud} memories={memories} canAdd />
 
   const open = teams.find((t) => t.id === openId)
   if (!open) return <TeamGrid teams={teams} me={me} online={online} onOpen={setOpenId} />

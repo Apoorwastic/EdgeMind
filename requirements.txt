@@ -6,3 +6,4 @@ httpx>=0.27
 openai>=1.50
 python-dotenv>=1.0
 fastembed>=0.7  # in-process embeddings (bge-small, ONNX Runtime)
+cryptography>=43

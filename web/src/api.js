@@ -72,6 +72,7 @@ async function direct(method, path, body) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (r.status === 401) { window.location.reload(); throw new Error('Sign in first.') } // session ended: back to the login page
   if (!r.ok) {
     let detail = r.statusText
     try { detail = (await r.json()).detail || detail } catch { /* not json */ }
@@ -188,7 +189,7 @@ async function offline(method, path, body) {
     case 'PATCH memories': {
       const m = local.mirrorMemories().find((x) => x.mem_id === b)
       if (!m) throw new Error('not found')
-      if (body.sensitivity === 'private' && m.origin && device && m.origin !== device.id) {
+      if (body.sensitivity && body.sensitivity !== 'shareable' && m.sensitivity === 'shareable' && m.origin && device && m.origin !== device.id) {
         throw new Error('Shared from another device — it isn’t yours to make private.')
       }
       local.queueEdit(b, body)
@@ -206,6 +207,35 @@ async function offline(method, path, body) {
     default:
       throw new Error(NOT_OFFLINE)
   }
+}
+
+// ---------------------------------------------------------------- sign-in (account devices only)
+
+// Asked before anything else. Unreachable device → the last answer this browser saw, so a signed-in
+// browser keeps working offline (its copy of the notes is already here).
+export async function session() {
+  try {
+    const r = await fetchRetry('api/session', { credentials: 'same-origin' }, 2)
+    if (!r.ok) throw new Error(r.statusText)
+    const s = await r.json()
+    local.lastSession.set(s.signed_in ? { ...s, demo: [] } : null)
+    return s
+  } catch {
+    return local.lastSession.get() || { required: false }
+  }
+}
+
+export async function login(username, password, device) {
+  const r = await fetch('api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, device: device || null }) })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(data.detail || 'Could not sign in.')
+  return data
+}
+
+export async function logout() {
+  try { await fetch('api/logout', { method: 'POST' }) } catch { /* offline: still forget this browser's copy */ }
+  local.forgetAll() // the next person on this browser must not see the copy of these notes
 }
 
 export const api = {

@@ -44,6 +44,8 @@ class Settings:
     cloud_base_url: str | None
 
     web_dist: Path
+    # Demo sign-in (edge/auth.py): the person this device belongs to; None = open device, no login.
+    account: str | None = None
 
 
 def _hosts(spec: str) -> list[tuple[str, int]]:
@@ -87,6 +89,7 @@ def load_settings() -> Settings:
         local_llm_fallback=os.getenv("LOCAL_LLM_FALLBACK", "phi3"),
         **_cloud_settings(),
         web_dist=ROOT / "web" / "dist",
+        account=os.getenv("ACCOUNT") or None,
     )
 
 

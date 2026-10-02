@@ -23,6 +23,10 @@ import httpx
 from qdrant_edge import Bm25, Bm25Config, SparseVector
 
 TOKEN = re.compile(r"[a-z0-9]+")
+# One loaded model per process, shared by every device in it (edge/host.py runs many devices in one
+# process): the model is ~125 MB of RAM, which would otherwise be paid once per device.
+_MODELS: dict[str, object] = {}
+_MODELS_LOCK = threading.RLock()
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
@@ -48,15 +52,19 @@ class Embedder:
     # ---- ONNX (default) ---------------------------------------------------
 
     def _load_onnx(self):
-        with self._onnx_lock:
-            if self._onnx is None:
-                from fastembed import TextEmbedding  # imported lazily: ~0.4 s, and only for this backend
-                self._onnx = TextEmbedding(self.model, cache_dir=self.cache_dir)
+        if self._onnx is None:
+            with _MODELS_LOCK:
+                if self.model not in _MODELS:
+                    from fastembed import TextEmbedding  # imported lazily: ~0.4 s, and only for this backend
+                    _MODELS[self.model] = TextEmbedding(self.model, cache_dir=self.cache_dir)
+                self._onnx = _MODELS[self.model]
         return self._onnx
 
     def _embed_onnx(self, text: str, kind: str) -> list[float]:
         prefix = BGE_QUERY_PREFIX if kind == "query" and "bge" in self.model.lower() else ""
-        return [float(x) for x in next(iter(self._load_onnx().embed([prefix + text])))]
+        model = self._load_onnx()
+        with _MODELS_LOCK:  # devices sharing the model take turns (~15 ms each)
+            return [float(x) for x in next(iter(model.embed([prefix + text])))]
 
     # ---- shared -----------------------------------------------------------
 

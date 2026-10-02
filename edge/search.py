@@ -20,16 +20,26 @@ this that these those there here from about as into than then so if any some all
 get got have has had s t""".split())
 
 
-_REFERS_BACK = re.compile(
-    r"\b(he|she|him|her|his|hers|it|its|they|them|their|theirs|that|this|those|these|there|same|one)\b", re.I)
+_POINTS_BACK = re.compile(r"\b(he|she|him|her|his|hers|it|its|they|them|their|theirs)\b", re.I)
+_REFERS_BACK = re.compile(r"\b(that|this|those|these|there|same|one)\b", re.I)
 _CONTINUES = re.compile(r"^\s*(and|also|what about|how about|what else|then|so|but)\b", re.I)
 
 
-def is_followup(question: str) -> bool:
-    """Might lean on the previous question: "What does she like?", "And the Wi-Fi password?", "His number?".
-    Only a hint — callers still check that the question alone doesn't already find a strong answer."""
+def followup_kind(question: str) -> str | None:
+    """How strongly a question leans on the previous one.
+
+    "pronoun": he/she/his/it/they… point back ("What's his number?" after "Who is the plumber?") — always
+    search together with the previous question, even if the question alone matches something else strongly
+    (alone, "his number" finds Dad's emergency number).
+    "hint": "And the Wi-Fi password?", "that one", a one-word question — only used when the question alone
+    finds no strong match, so a new question that merely looks like a follow-up stays on its own.
+    """
+    if _POINTS_BACK.search(question):
+        return "pronoun"
     meaningful = [w for w in words(question) if w not in STOP]
-    return bool(_REFERS_BACK.search(question) or _CONTINUES.search(question) or len(meaningful) <= 1)
+    if _REFERS_BACK.search(question) or _CONTINUES.search(question) or len(meaningful) <= 1:
+        return "hint"
+    return None
 
 
 def is_personal(question: str) -> bool:

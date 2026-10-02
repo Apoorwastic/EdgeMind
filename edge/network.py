@@ -22,6 +22,7 @@ A forced-offline switch is saved next to the ledger and survives restarts until 
 import asyncio
 import json
 import os
+import socket
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -43,6 +44,18 @@ class Egress:
     purpose: str
     mem_ids: list[str] = field(default_factory=list)
     bytes: int = 0
+
+
+_SHARED: dict[tuple, tuple[float, "asyncio.Future"]] = {}  # internet probe shared by the devices in this process
+
+
+def _connect_ms(host: str, port: int) -> float | None:
+    t0 = time.perf_counter()
+    try:
+        socket.create_connection((host, port), timeout=2.5).close()
+        return (time.perf_counter() - t0) * 1000
+    except OSError:
+        return None
 
 
 class NetworkGate:
@@ -67,12 +80,13 @@ class NetworkGate:
         self.weak_ms = float(os.getenv("WEAK_NET_MS", "800"))
         self.quality: str = "good" if not self.internet_hosts else "none"
         self.latency_ms: float | None = None
-        self._bad = self._good = 0
+        self._bad = self._good = self._srv_bad = 0
         self._probed = False  # the first probe after boot is trusted on its own
         self.ledger: deque[Egress] = deque(maxlen=5000)  # recent calls, for the Admin view
         # The privacy audit needs every call that carried a record, not just recent ones: id-less polling
         # (list-index, snapshot) would otherwise push old pushes and cloud calls out of the 5000 window.
         self.last_sent: dict[str, int] = {}  # mem_id -> ts of the latest outbound call that carried it
+        self.sealed_sent: dict[str, int] = {}  # same, for encrypted vault uploads (ciphertext only)
         self.calls = 0
         if ledger_path.exists():
             for line in ledger_path.read_text(encoding="utf-8").splitlines():
@@ -115,7 +129,10 @@ class NetworkGate:
         self._changed(was)
 
     async def probe(self) -> bool:
-        self.reachable, (quality, self.latency_ms) = await asyncio.gather(self._probe_server(), self._probe_internet())
+        up, (quality, self.latency_ms) = await asyncio.gather(self._probe_server(), self._probe_internet())
+        # Like the internet below: one missed answer from a busy server isn't "unreachable" yet.
+        self._srv_bad = 0 if up else self._srv_bad + 1
+        self.reachable = up or (self.reachable and self._probed and self._srv_bad < 2)
         # A dead link goes offline at once; a weak one only after two slow probes in a row. Recovery
         # needs two good probes, so a borderline connection doesn't flip back and forth.
         if quality == "good":
@@ -137,28 +154,40 @@ class NetworkGate:
         self._changed(was)
 
     async def _probe_server(self) -> bool:
-        try:
-            async with httpx.AsyncClient(timeout=1.5) as c:
-                r = await c.get(self.probe_url, headers=self.headers)
-                return r.status_code < 500
-        except Exception:
-            return False
+        key = ("server", self.probe_url)
+        hit = _SHARED.get(key)  # shared by the devices in this process, like the internet probe
+        if hit and time.monotonic() - hit[0] < 1.5:
+            return await hit[1]
+
+        async def check() -> bool:
+            try:
+                async with httpx.AsyncClient(timeout=3) as c:
+                    r = await c.get(self.probe_url, headers=self.headers)
+                    return r.status_code < 500
+            except Exception:
+                return False
+        fut = asyncio.ensure_future(check())
+        _SHARED[key] = (time.monotonic(), fut)
+        return await fut
 
     async def _probe_internet(self) -> tuple[str, float | None]:
-        """Returns (quality, fastest connect ms): "good", "weak" (slower than WEAK_NET_MS) or "none"."""
+        """Returns (quality, fastest connect ms): "good", "weak" (slower than WEAK_NET_MS) or "none".
+
+        Devices in one process (edge/host.py) are on the same machine and network, so they share one
+        probe per moment instead of each opening its own connections. The connect is timed in a thread:
+        a busy event loop (ten devices embedding notes) must not look like a slow network.
+        """
         if not self.internet_hosts:
             return "good", None
-
-        async def one(host: str, port: int) -> float | None:
-            t0 = time.perf_counter()
-            try:
-                _, w = await asyncio.wait_for(asyncio.open_connection(host, port), 2.5)
-                w.close()
-                return (time.perf_counter() - t0) * 1000
-            except (OSError, asyncio.TimeoutError):
-                return None
-
-        times = [t for t in await asyncio.gather(*(one(h, p) for h, p in self.internet_hosts)) if t is not None]
+        key = tuple(self.internet_hosts)
+        hit = _SHARED.get(key)
+        if hit and time.monotonic() - hit[0] < 1.5:
+            times = await hit[1]
+        else:
+            fut = asyncio.ensure_future(asyncio.gather(*(asyncio.to_thread(_connect_ms, h, p) for h, p in self.internet_hosts)))
+            _SHARED[key] = (time.monotonic(), fut)
+            times = await fut
+        times = [t for t in times if t is not None]
         if not times:
             return "none", None
         best = round(min(times), 1)
@@ -201,8 +230,11 @@ class NetworkGate:
     def _record(self, e: "Egress") -> None:
         self.ledger.append(e)
         self.calls += 1
+        # Encrypted vault uploads carry a Private note's id but never its text: tracked apart from
+        # plaintext egress, which is what the privacy audit holds private notes to.
+        sent = self.sealed_sent if e.purpose == "vault-push" else self.last_sent
         for m in e.mem_ids:
-            self.last_sent[m] = max(self.last_sent.get(m, 0), e.ts)
+            sent[m] = max(sent.get(m, 0), e.ts)
 
     def egressed_ids(self) -> set[str]:
         return set(self.last_sent)

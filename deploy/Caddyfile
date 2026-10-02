@@ -2,6 +2,7 @@
 #   /          judge-facing demo page (laptop + phone side by side)
 #   /laptop/   device_a  (desktop UI)
 #   /mobile/   device_b  (phone UI)
+#   /app/      one sign-in page for the demo accounts (Rakshit, Apoorwa, Akhila); /login redirects here
 # flush_interval -1 keeps the streaming endpoints (answers as NDJSON, live events as SSE) unbuffered.
 {
 	auto_https off
@@ -15,6 +16,14 @@
 
 	redir /laptop /laptop/
 	redir /mobile /mobile/
+
+	redir /login /app/
+	redir /app /app/
+	handle_path /app/* {
+		reverse_proxy 127.0.0.1:8100 {
+			flush_interval -1
+		}
+	}
 
 	handle_path /laptop/* {
 		reverse_proxy 127.0.0.1:8101 {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ago, api, fmtTime } from './api.js'
 import { Icon } from './icons.jsx'
 import TeamPicker from './TeamPicker.jsx'
+import { LEVELS, isPersonal, level } from './privacy.js'
 
 const ROUTES = {
   cloud: { label: 'Answered by cloud AI', icon: 'cloud', cls: 'r-cloud' },
@@ -23,10 +24,15 @@ const SUGGESTIONS = [
 function PrivacyChoice({ value, onChange }) {
   return (
     <div className="privacy-choice" role="radiogroup" aria-label="Who can see this note">
+      <button type="button" role="radio" aria-checked={value === 'device'}
+        className={`pc private device ${value === 'device' ? 'active' : ''}`} onClick={() => onChange('device')}
+        title="Never leaves this device, not even encrypted">
+        <Icon name="chip" size={14} /> This device
+      </button>
       <button type="button" role="radio" aria-checked={value === 'private'}
         className={`pc private ${value === 'private' ? 'active' : ''}`} onClick={() => onChange('private')}
-        title="Stays on this device — never synced">
-        <Icon name="lock" size={14} /> Only me
+        title="Only you: encrypted on your other devices">
+        <Icon name="lock" size={14} /> Private
       </button>
       <button type="button" role="radio" aria-checked={value === 'shareable'}
         className={`pc shared ${value === 'shareable' ? 'active' : ''}`} onClick={() => onChange('shareable')}
@@ -44,7 +50,7 @@ function Sources({ ids, memories }) {
       <span className="sources-label">Based on</span>
       {ids.map((id, i) => {
         const m = memories.find((x) => x.mem_id === id)
-        const priv = m?.sensitivity === 'private'
+        const priv = isPersonal(m)
         return (
           <span key={id} className={`source ${priv ? 'private' : 'shared'}`} title={m?.text}>
             <b>{i + 1}</b>
@@ -118,7 +124,7 @@ function MemoryRail({ last, memories, activity }) {
         {last && !hits.length && <p className="rail-empty">No note matched — answered from general knowledge.</p>}
         <ul className="rail-list">
           {(last ? hits : recent).map((m) => {
-            const priv = m.sensitivity === 'private'
+            const priv = isPersonal(m)
             const used = last?.used.includes(m.mem_id)
             return (
               <li key={m.mem_id} className={`mem-chip ${priv ? 'private' : 'shared'} ${used ? 'used' : ''}`}>
@@ -271,7 +277,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
           )}
           {turns.map((t, i) => {
             if (t.kind === 'note') {
-              const priv = t.sensitivity === 'private'
+              const priv = t.sensitivity !== 'shareable'
               const tTeam = teams.find((x) => x.id === t.teamId)
               const teamLabel = tTeam ? `Shared with ${tTeam.name}` : 'Shared with team'
               return (
@@ -280,8 +286,8 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                     <span className="saved-check"><Icon name="check" size={13} strokeWidth={2.4} /></span>
                     <b>Note saved</b>
                     <span className={`badge ${priv ? 'private' : online ? 'shared' : 'waiting'}`}>
-                      <Icon name={priv ? 'lock' : online ? 'users' : 'queued'} size={12} />
-                      {priv ? 'Only me' : !t.teamId ? 'Shares once you join a team' : online ? teamLabel : 'Will share when online'}
+                      <Icon name={priv ? LEVELS[t.sensitivity]?.icon : online ? 'users' : 'queued'} size={12} />
+                      {priv ? LEVELS[t.sensitivity]?.label : !t.teamId ? 'Shares once you join a team' : online ? teamLabel : 'Will share when online'}
                     </span>
                   </div>
                   <p>{t.text}</p>
@@ -338,7 +344,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                       {t.timing?.searched_for && <li>Corrected spelling: searched for “{t.timing.searched_for}”.</li>}
                       {t.timing?.followup_of && <li>Read as a follow-up to “{t.timing.followup_of}”, so both questions were searched together.</li>}
                       <li>{t.reason}.</li>
-                      {t.used?.some((id) => memories.find((m) => m.mem_id === id)?.sensitivity === 'private') &&
+                      {t.used?.some((id) => isPersonal(memories.find((m) => m.mem_id === id))) &&
                         <li>Private notes were used, so nothing was sent to the cloud.</li>}
                       {!state.teams?.length && !t.used?.length &&
                         <li>This device isn’t in a team, so notes saved on your other devices aren’t searched here.</li>}
@@ -365,7 +371,7 @@ export default function AskView({ state, memories, onChanged, activity, cid, onC
                 <Icon name="plus" size={15} /> Save a note
               </button>
             </div>
-            {mode === 'remember' && <PrivacyChoice value={sensitivity} onChange={(v) => { setSensitivity(v); if (v === 'private') setTeamId(null) }} />}
+            {mode === 'remember' && <PrivacyChoice value={sensitivity} onChange={(v) => { setSensitivity(v); if (v !== 'shareable') setTeamId(null) }} />}
           </div>
           {mode === 'remember' && sensitivity === 'shareable' && (
             <TeamPicker teams={teams} value={teamId} onPick={setTeamId} onAdded={setTeamId} />

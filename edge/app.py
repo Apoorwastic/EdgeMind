@@ -19,20 +19,22 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import auth
 from .cloud import CloudStore
 from .config import settings
 from .embeddings import Embedder
 from .events import EventBus
 from .llm import CloudLLM, LocalLLM, OllamaError, build_messages
 from .network import NetworkGate, OfflineError
-from .search import Vocabulary, is_followup, is_personal
+from .search import Vocabulary, followup_kind, is_personal
 from .store import LocalMemory
 from .sync import SyncManager, SyncState
 from .team import TeamError, TeamManager
+from .vault import VAULT_TEAM, Vault
 
 # nomic-embed-text puts unrelated notes around 0.40-0.55 cosine, so a hit counts as relevant
 # only above an absolute floor AND within a band of the best hit. Irrelevant hits never reach a model.
@@ -146,7 +148,19 @@ def _migrate_team_id() -> None:
 
 _migrate_team_id()
 
-syncer = SyncManager(S.device_id, store, cloud, embedder, gate, bus, state, team=team, on_removed=reset_shared_state)
+def _migrate_sync_state() -> None:
+    """Private notes now sync (encrypted) to the account's other devices: recompute each record's
+    stored sync_state so the vault pass can find them. Harmless when nothing changed."""
+    from .store import sync_state
+    for rec in store.all():
+        if rec.get("sync_state") != sync_state(rec):
+            store.set_fields(rec["mem_id"], {"sensitivity": rec.get("sensitivity", "private")})
+
+
+_migrate_sync_state()
+vault = Vault(S.account, S.data_dir, S.collection, COLLECTION_SUFFIX)
+syncer = SyncManager(S.device_id, store, cloud, embedder, gate, bus, state, team=team, on_removed=reset_shared_state,
+                     vault=vault)
 local_llm = LocalLLM(S.ollama_url, S.local_llm, [S.local_llm_fallback])
 cloud_llm = CloudLLM(S.cloud_api_key, S.cloud_model, gate, S.cloud_provider, S.cloud_base_url)
 prefs = {"private_route": "local"}  # "local" = private context never goes to cloud LLM; "redact" = send only shareable context
@@ -197,18 +211,86 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="EdgeMind device", lifespan=lifespan)
 
 
+# ---------------------------------------------------------------- sign-in (demo accounts, edge/auth.py)
+
+OPEN_PATHS = {"/api/session", "/api/login", "/api/logout"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """An account's device answers its API only to a browser signed in as that account."""
+    path = request.url.path
+    if S.account and path.startswith("/api/") and path not in OPEN_PATHS:
+        if (auth.verify(request.cookies.get(auth.COOKIE)) or {}).get("account") != S.account:
+            return JSONResponse({"detail": "Sign in first."}, status_code=401)
+    return await call_next(request)
+
+
+def _signed_in(request: Request) -> bool:
+    return bool(S.account) and (auth.verify(request.cookies.get(auth.COOKIE)) or {}).get("account") == S.account
+
+
+def _set_session(resp, account_id: str) -> None:
+    resp.set_cookie(auth.COOKIE, auth.sign(account_id, S.device_id, auth.SESSION_TTL),
+                    max_age=auth.SESSION_TTL, httponly=True, samesite="lax", path="/")
+
+
+@app.get("/api/session")
+async def session(request: Request):
+    acc = auth.get(S.account)
+    return {
+        "required": bool(S.account),
+        "signed_in": _signed_in(request),
+        "account": {"id": acc["id"], "name": acc["name"]} if acc else None,
+        "device": {"id": S.device_id, "name": S.device_name, "kind": S.device_kind},
+        "vault": {"enabled": vault.enabled, "unlocked": vault.unlocked},
+        # Demo only: the login page offers these as one-click fills (DEMO_HINTS=0 hides them).
+        "demo": [{"id": a["id"], "name": a["name"], "password": a["password"]} for a in auth.accounts()]
+        if S.account and os.getenv("DEMO_HINTS", "1") == "1" else [],
+    }
+
+
+class LoginBody(BaseModel):
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/api/login")
+async def login(body: LoginBody):
+    acc = auth.check_password(body.username, body.password)
+    if not acc or acc["id"] != S.account:
+        raise HTTPException(401, "Wrong name or password.")
+    # The password is at hand only now: derive this account's vault key from it (kept on this device).
+    first = not vault.unlocked
+    vault.unlock(body.password)
+    if first:
+        bus.activity("privacy", "Vault unlocked on this device — Private notes now sync encrypted with your other devices")
+        asyncio.create_task(syncer.sync(reason="unlock"))
+    resp = JSONResponse({"ok": True})
+    _set_session(resp, acc["id"])
+    return resp
+
+
+@app.post("/api/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    if S.account:
+        resp.delete_cookie(auth.COOKIE, path="/")
+    return resp
+
+
 # ---------------------------------------------------------------- models
 
 class NewMemory(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
-    sensitivity: Literal["private", "shareable"] = "private"
+    sensitivity: Literal["device", "private", "shareable"] = "private"
     team_id: str | None = None  # which team a shareable note goes to; auto-filled if there's only one
     supersedes: str | None = None
 
 
 class EditMemory(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=4000)
-    sensitivity: Literal["private", "shareable"] | None = None
+    sensitivity: Literal["device", "private", "shareable"] | None = None
     team_id: str | None = None
 
 
@@ -340,7 +422,7 @@ def new_chat_id() -> str:
 @app.get("/api/state")
 async def get_state():
     return {
-        "device": {"id": S.device_id, "name": S.device_name, "kind": S.device_kind, "port": S.port},
+        "device": {"id": S.device_id, "name": S.device_name, "kind": S.device_kind, "port": S.port, "account": S.account},
         "network": gate.state(),
         "sync": syncer.status(),
         "memory": store.stats(),
@@ -410,7 +492,9 @@ async def add_memory(body: NewMemory):
         "supersedes": None, "superseded_by": None,
     }
     store.upsert(rec, dense, sparse)
-    tag = ("🔒 private — will never leave this device" if body.sensitivity == "private"
+    tag = ("this device only — never leaves it" if body.sensitivity == "device"
+           else ("private — encrypted for your other devices" if vault.enabled else "private — stays on this device")
+           if body.sensitivity == "private"
            else "queued for sync" if tid else "shareable — needs a team before it can sync")
     bus.activity("memory", f"Stored {rec['mem_id']} locally ({tag})", mem_id=rec["mem_id"], sensitivity=body.sensitivity)
     if body.supersedes:
@@ -427,16 +511,24 @@ async def edit_memory(mem_id: str, body: EditMemory):
     fields: dict = {"updated_ts": now_ms(), "updated_by": S.device_id}
     resulting_sensitivity = body.sensitivity or rec["sensitivity"]
 
-    if body.sensitivity and body.sensitivity != rec["sensitivity"] and body.sensitivity == "private":
-        if rec.get("origin") != S.device_id:
-            raise HTTPException(409, f"Shared by {rec.get('origin')} — it isn't yours to make private. Delete it or add your own note.")
-        if (rec.get("base_rev") or 0) > 0:
-            syncer.queue_retraction(mem_id, "re-tagged private", rec.get("team_id"))
-        fields.update(sensitivity="private", team_id=None, synced=False, rev=0, base_rev=0, private_since=now_ms())
-        bus.activity("privacy", f"{mem_id} re-tagged private — retraction queued; content will not sync again", mem_id=mem_id)
+    if body.sensitivity and body.sensitivity != rec["sensitivity"] and body.sensitivity in ("private", "device"):
+        if rec["sensitivity"] == "shareable":
+            if rec.get("origin") != S.device_id:
+                raise HTTPException(409, f"Shared by {rec.get('origin')} — it isn't yours to make private. Delete it or add your own note.")
+            if (rec.get("base_rev") or 0) > 0:
+                syncer.queue_retraction(mem_id, f"re-tagged {body.sensitivity}", rec.get("team_id"))
+        elif rec["sensitivity"] == "private" and rec.get("vault_synced"):
+            syncer.queue_retraction(mem_id, "made this-device-only", VAULT_TEAM)  # off your other devices too
+        fields.update(sensitivity=body.sensitivity, team_id=None, synced=False, vault_synced=False, rev=0, base_rev=0,
+                      private_since=now_ms())
+        bus.activity("privacy", f"{mem_id} re-tagged {'this device only' if body.sensitivity == 'device' else 'private'}"
+                     " — content will not reach the team again", mem_id=mem_id)
 
     elif resulting_sensitivity == "shareable" and (body.sensitivity == "shareable" or body.team_id is not None):
         was_shareable = rec["sensitivity"] == "shareable"
+        if rec["sensitivity"] == "private" and rec.get("vault_synced"):
+            syncer.queue_retraction(mem_id, "shared with a team instead", VAULT_TEAM)
+            fields["vault_synced"] = False
         current_team = rec.get("team_id") if was_shareable else None
         target_team = resolve_team_id(body.team_id) if body.team_id is not None else (current_team or resolve_team_id(None))
         if was_shareable and current_team and target_team != current_team and (rec.get("base_rev") or 0) > 0:
@@ -453,6 +545,8 @@ async def edit_memory(mem_id: str, body: EditMemory):
         merged = {**rec, **fields, "text": text, "embedder": emb_name}
         if merged["sensitivity"] == "shareable":
             merged["synced"] = False
+        if merged["sensitivity"] == "private":
+            merged["vault_synced"] = False  # the edit goes to your other devices too
         store.upsert(merged, dense, embedder.sparse_doc(text))
         bus.activity("memory", f"Edited {mem_id} on device", mem_id=mem_id)
     else:
@@ -468,6 +562,8 @@ async def delete_memory(mem_id: str):
         raise HTTPException(404, "not found")
     if rec.get("sensitivity") == "shareable" and (rec.get("base_rev") or 0) > 0:
         syncer.queue_retraction(mem_id, "deleted", rec.get("team_id"))
+    if rec.get("sensitivity") == "private" and rec.get("vault_synced"):
+        syncer.queue_retraction(mem_id, "deleted", VAULT_TEAM)
     store.delete(mem_id)
     bus.activity("memory", f"Deleted {mem_id} from device", mem_id=mem_id)
     bus.emit("memory", None)
@@ -513,7 +609,7 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
     With no relevant memory the question is answered from general knowledge: by the cloud model when
     online (only the question and non-private chat history leave the device), else by the on-device model.
     """
-    private = [h for h in context if h["sensitivity"] == "private"]
+    private = [h for h in context if h["sensitivity"] != "shareable"]
     local_ok = local_llm.available
     no_local = local_llm.down_reason if local_llm.down_reason and not local_ok else "no on-device model"
     if not context:
@@ -527,7 +623,7 @@ def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
         if not private:
             return "cloud", "online · context is shareable", context
         if prefs["private_route"] == "redact":
-            shared = [h for h in context if h["sensitivity"] != "private"]
+            shared = [h for h in context if h["sensitivity"] == "shareable"]
             return "cloud", f"online · {len(private)} private memories withheld from cloud", shared
         if local_ok:
             return "local", f"online, but {len(private)} private memories matched → answered on-device", context
@@ -572,7 +668,7 @@ async def ask(body: AskBody, request: Request):
 
         def save(stopped: bool = False) -> None:
             ts = now_ms()
-            is_private = any(h["sensitivity"] == "private" for h in used) and final_route != "cloud"
+            is_private = any(h["sensitivity"] != "shareable" for h in used) and final_route != "cloud"
             append_chat({"cid": cid, "role": "user", "text": q, "ts": ts, "private": is_private})
             append_chat({"cid": cid, "role": "assistant", "text": answer, "ts": ts, "route": final_route,
                          "used": [h["mem_id"] for h in used], "private": is_private, "mode": mode,
@@ -588,8 +684,9 @@ async def ask(body: AskBody, request: Request):
             # no strong match, so a new question that merely looks like a follow-up isn't pulled off course.
             prev = next((t for t in reversed(history) if t["role"] == "user"), None)
             followup = None
-            if prev and is_followup(q) and not (timing.get("fast") or any(
-                    h["relevant"] and h["semantic"] >= STRONG for h in hits)):
+            kind = followup_kind(q) if prev else None
+            if kind == "pronoun" or (kind == "hint" and not (timing.get("fast") or any(
+                    h["relevant"] and h["semantic"] >= STRONG for h in hits))):
                 hits2, timing2 = await local_search(f"{prev['text']} {q}", limit=8)
                 if any(h["relevant"] for h in hits2):
                     hits, timing, followup = hits2, {**timing2, "searched_for": timing.get("searched_for")}, prev
@@ -869,11 +966,14 @@ async def privacy_audit():
     in the per-team push path should still get caught here regardless of which team it hit.
     """
     private = {r["mem_id"]: r.get("private_since") or r.get("ts") or 0
-               for r in store.all() if r.get("sensitivity") == "private"}
+               for r in store.all() if r.get("sensitivity") in ("private", "device")}
+    device_only = {r["mem_id"] for r in store.all() if r.get("sensitivity") == "device"}
     # A record shared earlier and later re-tagged private legitimately appears in the ledger from
     # before the re-tag, so only outbound calls made while it was private count as violations.
-    leaked = sorted(m for m, ts in gate.last_sent.items() if m in private and ts >= private[m])
+    leaked = sorted({m for m, ts in gate.last_sent.items() if m in private and ts >= private[m]}
+                    | {m for m, ts in gate.sealed_sent.items() if m in device_only and ts >= private[m]})
     in_cloud: list[str] | None = None
+    in_vault: list[str] = []
     teams_checked = 0
     if gate.online:
         try:
@@ -884,11 +984,21 @@ async def privacy_audit():
                     live |= {m for m, meta in (await cloud.index()).items() if not meta.get("deleted")}
                 teams_checked += 1
             in_cloud = sorted(set(private) & live)
+            # Your vault may hold Private notes, but only sealed: no text and no vectors. A device-only
+            # note, or anything readable, in it is a violation.
+            if vault.enabled:
+                async with cloud.for_team(vault.collection):
+                    sealed = {m: meta for m, meta in (await cloud.sealed_index()).items() if not meta.get("deleted")}
+                in_vault = sorted(sealed)
+                in_cloud += sorted(m for m, meta in sealed.items()
+                                   if m in device_only or meta.get("text") or meta.get("has_vectors") or not meta.get("sealed"))
         except Exception:
             in_cloud = None
     retracting = {r["mem_id"] for r in state["retractions"]}
     return {
         "private_records": len(private),
+        "device_only_records": len(device_only),
+        "encrypted_in_vault": len(in_vault),
         "outbound_calls": gate.calls,
         "private_in_outbound": leaked,
         "private_in_cloud": in_cloud,

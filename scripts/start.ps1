@@ -52,23 +52,20 @@ if (-not (Test-Qdrant)) {
 }
 Write-Host ("  Qdrant Server " + $(if (Test-Qdrant) { "ready  ->  http://localhost:6333" } else { "NOT reachable (devices will run offline)" }))
 
-$devices = @(
-  @{ id = "device_a"; name = "Laptop"; kind = "laptop"; port = 8101 },
-  @{ id = "device_b"; name = "Mobile"; kind = "mobile"; port = 8102 }
-)
-foreach ($d in $devices) {
-  $env:DEVICE_ID = $d.id; $env:DEVICE_NAME = $d.name; $env:DEVICE_KIND = $d.kind; $env:PORT = "$($d.port)"
-  Start-Process -WindowStyle Hidden -FilePath "$root\.venv\Scripts\python.exe" -ArgumentList "-m", "edge" `
-    -RedirectStandardOutput "data\$($d.id).out.log" -RedirectStandardError "data\$($d.id).err.log"
-}
-Remove-Item Env:DEVICE_ID, Env:DEVICE_NAME, Env:DEVICE_KIND, Env:PORT
+# Every device in deploy/demo.json (Laptop, Mobile and the demo accounts) runs inside ONE process
+# (edge/host.py): the libraries and search model load once. Each device keeps its own port and data.
+# The sign-in address for every account is :8100.
+Start-Process -WindowStyle Hidden -FilePath "$root\.venv\Scripts\python.exe" -ArgumentList "-m", "edge.host" `
+  -RedirectStandardOutput "data\host.out.log" -RedirectStandardError "data\host.err.log"
 
-foreach ($d in $devices) {
+$devices = (Get-Content -Raw deploy\demo.json | ConvertFrom-Json).devices
+$ports = @($devices | ForEach-Object { @{ name = $_.name; port = $_.port } }) + @(@{ name = "Sign in (all accounts)"; port = 8100 })
+foreach ($d in $ports) {
   $up = $false
-  for ($i = 0; $i -lt 40 -and -not $up; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:$($d.port)/api/state" -TimeoutSec 2 | Out-Null; $up = $true }
+  for ($i = 0; $i -lt 120 -and -not $up; $i++) {
+    try { Invoke-RestMethod "http://127.0.0.1:$($d.port)/api/session" -TimeoutSec 2 | Out-Null; $up = $true }
     catch { Start-Sleep -Milliseconds 500 }
   }
   if ($up) { Write-Host "  $($d.name) ready  ->  http://localhost:$($d.port)" }
-  else { Write-Host "  $($d.name) failed to start; see data\$($d.id).err.log" }
+  else { Write-Host "  $($d.name) failed to start; see data\host.err.log" }
 }
