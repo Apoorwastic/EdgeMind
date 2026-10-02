@@ -118,6 +118,14 @@ export const chats = {
   newId: () => tmpId('c'),
 }
 
+// A copy of the device's own chat history ({cid: turns}), so a device that lost its disk (a redeploy on a
+// host without persistent storage) gets it back from this browser. See api.js syncChatBackup.
+export const chatBackup = {
+  get: () => read('chatbackup', {}),
+  set: (byCid) => write('chatbackup', byCid),
+  remove: (cid) => { const all = read('chatbackup', {}); delete all[cid]; write('chatbackup', all) },
+}
+
 // ---------------------------------------------------------------- activity + offline-AI prefs
 
 export function logActivity(kind, message) {

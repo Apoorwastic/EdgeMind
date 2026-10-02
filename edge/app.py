@@ -861,6 +861,36 @@ async def chats():
     return list_chats()
 
 
+# Chat history lives in this device's data folder. A host without persistent storage (Railway without a
+# volume) starts every redeploy with an empty disk, so the signed-in browser keeps a copy and puts back
+# whatever the device lost (web/src/api.js, syncChatBackup).
+@app.get("/api/chats-backup")
+async def chats_backup():
+    return _all_turns()
+
+
+class RestoreTurns(BaseModel):
+    turns: list[dict] = Field(max_length=20000)
+
+
+@app.post("/api/chats-restore")
+async def chats_restore(body: RestoreTurns):
+    have = {(t.get("cid"), t.get("ts"), t.get("role")) for t in _all_turns()}
+    added = 0
+    for t in body.turns:
+        if not (isinstance(t.get("cid"), str) and t.get("role") in ("user", "assistant") and isinstance(t.get("text"), str)
+                and isinstance(t.get("ts"), (int, float))) or (t["cid"], t["ts"], t["role"]) in have:
+            continue
+        keep = {k: t[k] for k in ("cid", "role", "text", "ts", "route", "used", "private", "mode", "stopped") if k in t}
+        append_chat(keep)
+        have.add((t["cid"], t["ts"], t["role"]))
+        added += 1
+    if added:
+        bus.activity("system", f"Restored {added} chat messages this device had lost (kept in your browser)")
+        bus.emit("chats", None)
+    return {"restored": added}
+
+
 @app.get("/api/chats/{cid}")
 async def chat_history(cid: str):
     return read_chat(cid, 200)

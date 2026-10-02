@@ -167,6 +167,34 @@ function chatList() {
   return [...byId.values()].sort((a, b) => b.ts - a.ts)
 }
 
+// The device's chat history, also kept in this browser. A device that comes back without chats this
+// browser has (a redeploy on a host with no persistent disk) gets them back; the copy is refreshed
+// whenever the device has turns it lacks.
+let backingUp = false
+async function syncChatBackup(serverList) {
+  if (backingUp) return
+  backingUp = true
+  try {
+    const backup = local.chatBackup.get()
+    const onServer = new Map(serverList.map((c) => [c.id, c.turns]))
+    const lost = Object.entries(backup).filter(([cid, turns]) => turns.length && !onServer.has(cid))
+    if (lost.length) {
+      const { restored } = await direct('POST', 'api/chats-restore', { turns: lost.flatMap(([, turns]) => turns) })
+      if (restored) {
+        local.logActivity('sync', `Put back ${lost.length} chat${lost.length > 1 ? 's' : ''} the device had lost`)
+        chatListeners.forEach((fn) => fn())
+      }
+    }
+    if (lost.length || serverList.some((c) => (backup[c.id]?.length || 0) !== c.turns)) {
+      const byCid = {}
+      for (const t of await direct('GET', 'api/chats-backup')) (byCid[t.cid] ||= []).push(t)
+      local.chatBackup.set(byCid)
+    }
+  } finally {
+    backingUp = false
+  }
+}
+
 const NOT_OFFLINE = 'Not available while the device is unreachable — reconnect first.'
 
 async function offline(method, path, body) {
@@ -257,7 +285,11 @@ export const api = {
   search: (q) => req('POST', 'api/search', { q }),
   // The device's chats plus the ones this browser's own AI answered (offline, or private questions
   // answered in the browser while online): those live only in this browser, so they're merged in here.
-  chats: async () => { await req('GET', 'api/chats'); return chatList() },
+  chats: async () => {
+    const list = await req('GET', 'api/chats')
+    if (!browserMode) syncChatBackup(list).catch((e) => console.warn('chat backup', e))
+    return chatList()
+  },
   // A chat can hold turns from both the device and this browser (asked while the device was unreachable).
   chat: async (cid) => {
     const turns = await req('GET', `api/chats/${cid}`)
@@ -266,6 +298,7 @@ export const api = {
   deleteChat: async (cid) => {
     const inBrowser = local.chats.turns(cid).length > 0
     local.chats.remove(cid)
+    local.chatBackup.remove(cid) // deleted on purpose: never restore it
     try {
       return await req('DELETE', `api/chats/${cid}`)
     } catch (e) {
