@@ -612,6 +612,21 @@ def notes_answer(context: list[dict]) -> str:
     return f"From your notes: {context[0]['text']}"
 
 
+def no_answer(local_err: str | None) -> str:
+    """Nothing in the notes matched and no model answered: say what's missing, plainly."""
+    if local_err:
+        return f"No note matches that, and the on-device model {local_llm.model} couldn't answer. {local_err}"
+    if not cloud_llm.configured and not local_llm.preferred:
+        return ("No note matches that. General questions need an AI model, and none is set up here: the server "
+                "needs a GEMINI_API_KEY, or your browser can download its own AI (Admin › Offline AI).")
+    if not gate.online:
+        return "No note matches that. General questions need the internet, or an AI on this device."
+    if cloud_llm.configured:
+        return f"No note matches that, and the cloud model ({cloud_llm.provider}) couldn't answer just now. Try again in a moment."
+    return (f"No note matches that, and the on-device model {local_llm.model} isn't responding "
+            "(is Ollama running?). Try again in a moment.")
+
+
 def plan_route(context: list[dict]) -> tuple[str, str, list[dict]]:
     """Decide who generates, and with which memories. Returns (route, reason, context).
 
@@ -814,11 +829,7 @@ async def ask(body: AskBody, request: Request):
                         yield json.dumps({"type": "reroute", "route": "retrieval", "reason": f"{r3} model error: {type(e).__name__}"}) + "\n"
 
             if final_route == "retrieval":
-                answer = notes_answer(context) if context else \
-                         (f"No note matches that, and the on-device model {local_llm.model} couldn't answer. {local_err}"
-                          if local_err else
-                          "No note matches that, and no AI model could answer right now "
-                          f"(the on-device model {local_llm.model} isn't responding; is Ollama running?). Try again in a moment.")
+                answer = notes_answer(context) if context else no_answer(local_err)
                 yield json.dumps({"type": "token", "t": answer}) + "\n"
 
             save()

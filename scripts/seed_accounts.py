@@ -118,8 +118,19 @@ def main():
     args = ap.parse_args()
     spec = demo()
     clients = {d["id"]: signed_in(d) for d in spec["devices"] if d.get("account")}
+    # Seeding needs the shared server, so devices go online for it; a device someone switched offline
+    # is switched back afterwards (this runs on every server start, and must not undo the toggle).
+    switched_off = [c for c in clients.values() if c.get("/api/state").json()["network"]["mode"] == "offline"]
     for c in clients.values():
         c.post("/api/network", json={"mode": "auto"})
+    try:
+        seed(args, spec, clients)
+    finally:
+        for c in switched_off:
+            c.post("/api/network", json={"mode": "offline"})
+
+
+def seed(args, spec: dict, clients: dict) -> None:
     for who, c in clients.items():  # just started: wait for each device's first connectivity check
         for _ in range(60):
             if c.get("/api/state").json()["network"]["online"]:

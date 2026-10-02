@@ -116,7 +116,8 @@ def main():
     ensure_team(TEAM_NAMES[args.scenario])
     notes = SCENARIOS[args.scenario]
     for c, key in ((A, "a"), (B, "b")):
-        c.post("/api/network", json={"mode": "auto"})
+        if c.get("/api/state").json()["network"]["mode"] == "offline":
+            continue  # switched offline on purpose: leave it (and its notes) as the user set it
         have = {m["text"] for m in c.get("/api/memories").json()}  # re-running only adds what's missing
         for text, sensitivity in notes[key]:
             if text in have:

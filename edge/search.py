@@ -18,6 +18,7 @@ STOP = set("""a an the is are was were be been am i me my mine you your we our i
 or but not no do does did what whats when where who whom which why how can could should would will shall may might
 this that these those there here from about as into than then so if any some all tell give please thanks much many
 get got have has had s t""".split())
+PRONOUNS = set("he she him her his hers they them their theirs".split())
 
 
 _POINTS_BACK = re.compile(r"\b(he|she|him|her|his|hers|it|its|they|them|their|theirs)\b", re.I)
@@ -112,9 +113,11 @@ class Vocabulary:
             for cand, n in self.counts.items():
                 # Typos rarely change the first letter; requiring it keeps general questions from being "corrected"
                 # into note words.
-                if cand[0] != w[0] or abs(len(cand) - len(w)) > cap:
-                    continue
+                if cand[0] != w[0] or abs(len(cand) - len(w)) > cap or cand in STOP or cand in PRONOUNS:
+                    continue  # never "correct" into a filler word: "theory" is not a typo of "they"
                 d = edit_distance(w, cand, cap)
+                if d == 2 and len(cand) <= 4:
+                    continue  # two edits from a short word reach far too many real words
                 # Two edits can turn many words into others ("tallest" → "tablet"); then also ask that most of
                 # the word's letter-trigrams survive (typos keep them: "granmas"/"grandma" 0.33, that pair 0.15).
                 if d == 2 and len(trigrams(w) & trigrams(cand)) / len(trigrams(w) | trigrams(cand)) < 0.3:
