@@ -62,6 +62,13 @@ const jaccard = (a, b) => {
   return n / (A.size + B.size - n)
 }
 
+const PRONOUNS = new Set('he she him her his hers they them their theirs'.split(' '))
+
+// English words from the search model's own vocabulary (set once the model has loaded, see brain.js). A
+// question word found here is a real word, not a typo: "full" must not become the notes' "fully".
+let REAL = null
+export function setRealWords(set) { REAL = set }
+
 export class Vocabulary {
   constructor() { this.key = null; this.counts = new Map(); this.stems = new Set(); this.noteTerms = new Map() }
 
@@ -79,13 +86,14 @@ export class Vocabulary {
   correct(question) {
     const fixes = {}
     for (const w of new Set(words(question))) {
-      if (w.length < 4 || STOP.has(w) || /^\d+$/.test(w) || this.counts.has(w) || this.stems.has(stem(w))) continue
+      if (w.length < 4 || STOP.has(w) || /^\d+$/.test(w) || this.counts.has(w) || this.stems.has(stem(w)) || REAL?.has(w)) continue
       const cap = w.length <= 5 ? 1 : 2
       let best = null
       for (const [cand, n] of this.counts) {
         // Typos rarely change the first letter; requiring it keeps general questions from being "corrected".
-        if (cand[0] !== w[0] || Math.abs(cand.length - w.length) > cap) continue
+        if (cand[0] !== w[0] || Math.abs(cand.length - w.length) > cap || STOP.has(cand) || PRONOUNS.has(cand)) continue
         const d = editDistance(w, cand, cap)
+        if (d === 2 && cand.length <= 4) continue // two edits from a short word reach far too many real words
         if (d > cap || (d === 2 && jaccard(w, cand) < 0.3)) continue // two edits must keep most trigrams
         if (!best || d < best.d || (d === best.d && n > best.n)) best = { d, n, cand }
       }

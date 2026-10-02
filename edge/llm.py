@@ -18,11 +18,18 @@ from .network import NetworkGate
 class OllamaError(RuntimeError):
     """Ollama refused a request; the message is Ollama's own (e.g. not enough memory to load the model)."""
 
+# A note can be related without holding the answer ("What is DBMS?" next to "the DBMS assignment is due
+# Monday"): then general knowledge answers it, and the note is mentioned only where it helps.
 SYSTEM = (
-    "You are EdgeMind, a personal memory assistant. Answer the user's question using ONLY the "
-    "memories provided. Memories are listed newest first; if two memories conflict, prefer the newer one "
-    "and say that an older note disagreed. If the memories do not contain the answer, say so plainly — "
-    "do not invent facts. Be concise (1-4 sentences). Cite memories inline like [1], [2]."
+    "You are EdgeMind, a personal memory assistant. You are given some of the user's notes that look related "
+    "to the question, newest first. If the notes answer the question, answer from them: copy names, numbers "
+    "and dates exactly, cite them inline like [1], and if two notes conflict prefer the newer one and say an "
+    "older note disagreed. If the notes are only related and do not contain the answer (for example a general "
+    "'what is' or 'how does' question), answer from your general knowledge instead; do not force an answer out "
+    "of the notes, and add at most one short sentence about a note that is genuinely useful, cited. Cite a note only "
+    "for what it actually says. Never "
+    "invent personal facts (numbers, dates, codes, names, places) that are not in the notes. Be concise "
+    "(1-4 sentences, or a short list)."
 )
 
 # Used when no note matches: behave like a general assistant, but never pretend the answer came from notes.

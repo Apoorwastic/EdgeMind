@@ -3,14 +3,21 @@
 // browser's built-in one when it has it (nothing to download), otherwise WebLLM on WebGPU, downloaded once
 // while online — automatically, sized to this device — and then loaded from the browser's cache.
 import { aiPrefs, chats, logActivity } from './local.js'
-import { Vocabulary, followupKind, isPersonal, words } from './textsearch.js'
+import { Vocabulary, followupKind, isPersonal, setRealWords, words } from './textsearch.js'
 
 // Same prompts as the device (edge/llm.py), so answers read the same online and offline.
+// Same as the device (edge/llm.py): a related note that doesn't hold the answer ("What is DBMS?" next to
+// "the DBMS assignment is due Monday") leaves the answer to general knowledge.
 const SYSTEM =
-  "You are EdgeMind, a personal memory assistant. Answer the user's question using ONLY the " +
-  'memories provided. Memories are listed newest first; if two memories conflict, prefer the newer one ' +
-  'and say that an older note disagreed. If the memories do not contain the answer, say so plainly — ' +
-  'do not invent facts. Be concise (1-4 sentences). Cite memories inline like [1], [2].'
+  "You are EdgeMind, a personal memory assistant. You are given some of the user's notes that look related " +
+  'to the question, newest first. If the notes answer the question, answer from them: copy names, numbers ' +
+  'and dates exactly, cite them inline like [1], and if two notes conflict prefer the newer one and say an ' +
+  "older note disagreed. If the notes are only related and do not contain the answer (for example a general " +
+  "'what is' or 'how does' question), answer from your general knowledge instead; do not force an answer out " +
+  'of the notes, and add at most one short sentence about a note that is genuinely useful, cited. Cite a note ' +
+  'only for what it actually says. Never ' +
+  'invent personal facts (numbers, dates, codes, names, places) that are not in the notes. Be concise ' +
+  '(1-4 sentences, or a short list).'
 // "What is MY plumber's number?" and no note has it: general knowledge can only guess, so say it wasn't found.
 const SYSTEM_PERSONAL =
   "You are EdgeMind, a personal memory assistant. The question is about the user's own life, and none of " +
@@ -205,6 +212,14 @@ let embedP = null
 function embedder(progress) {
   embedP ||= import('@huggingface/transformers')
     .then(({ pipeline }) => pipeline('feature-extraction', EMBED.id, { dtype: 'q8', device: 'wasm', progress_callback: progress }))
+    .then((pipe) => {
+      // Its WordPiece vocabulary doubles as an English word list for typo correction (textsearch.js).
+      try {
+        const vocab = pipe.tokenizer?.model?.tokens_to_ids
+        if (vocab) setRealWords(new Set([...vocab.keys()].filter((w) => /^[a-z]{3,}$/.test(w))))
+      } catch { /* correction just runs without the word list */ }
+      return pipe
+    })
     .catch((e) => { embedP = null; throw e })
   return embedP
 }
@@ -683,10 +698,15 @@ function buildMessages(q, hits, history, general, weak = false) {
         : 'answers it, answer from general knowledge in a few sentences and do not mention the notes.')
     return [{ role: 'system', content: sys }, { role: 'user', content: `Notes:\n${ctx}\n\nQuestion: ${q}` }]
   }
-  const system = 'You are EdgeMind, a personal memory assistant. Answer the question using ONLY the notes. ' + OWN_NOTES +
-    'Reply with one short sentence. Copy names, numbers, dates and codes exactly as written in the notes. ' +
-    'Do not list the notes, number anything or use brackets. If the notes do not contain the answer, ' +
-    'say "Your notes don\'t mention that."'
+  // A related note may not hold the answer ("What is DBMS?" next to "the DBMS assignment is due Monday"):
+  // a general question then gets general knowledge; a personal one never gets a guess.
+  const system = 'You are EdgeMind, a personal memory assistant. ' + OWN_NOTES +
+    'If the notes answer the question, reply with one short sentence, copying names, numbers, dates and codes ' +
+    'exactly as written in the notes. Do not list the notes, number anything or use brackets. ' +
+    (isPersonal(q)
+      ? 'If the notes do not contain the answer, say "Your notes don\'t mention that."'
+      : 'If the notes are only related and do not contain the answer, answer from general knowledge in a few ' +
+        'sentences instead, without repeating the notes.')
   return [{ role: 'system', content: system }, { role: 'user', content: `Notes:\n${ctx}\n\nQuestion: ${q}` }]
 }
 

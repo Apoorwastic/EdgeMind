@@ -1,7 +1,8 @@
 """Text helpers that make note search forgiving and fast, on top of Qdrant's dense + BM25 search.
 
 * Typo correction: a question word that appears in no note ("plumbre") is replaced by the closest word
-  that does ("plumber") when it is 1-2 edits away. BM25 needs exact words, and a misspelling also drags
+  that does ("plumber") when it is 1-2 edits away — unless it is a real English word ("full", "theory"),
+  checked against the search model's own vocabulary. BM25 needs exact words, and a misspelling also drags
   the question's meaning vector away from the note.
 * Word coverage: whether a note contains most of the question's meaningful words (used when a note's
   vector can't be compared, and to back up a "clear winner" match), with letter-trigram matching so a
@@ -11,8 +12,11 @@
 
 Notes are few per device (tens to a few thousand), so all of this is plain Python over a cached vocabulary.
 """
+import json
+import os
 import re
 from collections import Counter
+from pathlib import Path
 
 STOP = set("""a an the is are was were be been am i me my mine you your we our it its of to in on at for by with and
 or but not no do does did what whats when where who whom which why how can could should would will shall may might
@@ -85,6 +89,29 @@ def trigrams(w: str) -> set[str]:
     return {w[i:i + 3] for i in range(len(w) - 2)}
 
 
+_REAL: set[str] | None = None
+
+
+def real_words() -> set[str]:
+    """English words, from the search model's own vocabulary (bge-small's WordPiece list, ~20k whole words).
+    A question word found here is a real word, not a typo: "full" must not become the notes' "fully", nor
+    "theory" become "they". Empty (no check) if the model files aren't on this machine."""
+    global _REAL
+    if _REAL is None:
+        _REAL = set()
+        roots = [os.getenv("FASTEMBED_CACHE_PATH"), Path(__file__).resolve().parent.parent / "data" / "models", "/opt/fastembed"]
+        for root in filter(None, roots):
+            for p in Path(root).glob("**/tokenizer.json"):
+                if "bge" in str(p).lower():
+                    try:
+                        vocab = json.loads(p.read_text(encoding="utf-8"))["model"]["vocab"]
+                    except (OSError, ValueError, KeyError):
+                        continue
+                    _REAL = {w for w in vocab if w.isalpha() and len(w) >= 3}  # whole words, not "##" pieces
+                    return _REAL
+    return _REAL
+
+
 class Vocabulary:
     """Words used in this device's notes, rebuilt only when the notes change."""
 
@@ -106,8 +133,8 @@ class Vocabulary:
         """The question with unknown words replaced by the closest note word. Returns (question, {typo: fix})."""
         fixes = {}
         for w in set(words(question)):
-            if len(w) < 4 or w in STOP or w.isdigit() or w in self.counts or stem(w) in self.stems:
-                continue  # short, filler, a number, or already a word the notes use
+            if len(w) < 4 or w in STOP or w.isdigit() or w in self.counts or stem(w) in self.stems or w in real_words():
+                continue  # short, filler, a number, a word the notes use, or a real word (not a typo)
             cap = 1 if len(w) <= 5 else 2
             best = None
             for cand, n in self.counts.items():
