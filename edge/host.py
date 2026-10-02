@@ -181,17 +181,27 @@ async def report_memory(every: float = 60) -> None:
 
 
 async def main() -> None:
+    if os.getenv("EDGEMIND_LOOP_DEBUG") == "1":  # log anything that holds the shared event loop > 0.1 s
+        import logging
+        logging.basicConfig(level=logging.WARNING)
+        loop = asyncio.get_running_loop()
+        loop.set_debug(True)
+        loop.slow_callback_duration = 0.1
     data_root = Path(os.getenv("EDGEMIND_DATA") or config_mod._default_data_root())
     devices = wanted_devices()
     apps = {}
     for d in devices:
         apps[d["id"]] = load_device(d, data_root)
         print(f"[edgemind] {d['name']} ({d['id']}) on :{d['port']}" + (f" · account {d['account']}" if d.get("account") else ""), flush=True)
-    servers = [_Server(uvicorn.Config(apps[d["id"]], host="0.0.0.0", port=d["port"], log_level="warning"))
-               for d in devices]
+    # Keep idle connections open longer than the proxy in front does (Caddy: 2 min). Otherwise the server
+    # closes a connection just as the proxy reuses it, and that request fails ("incomplete response").
+    keep = int(os.getenv("KEEP_ALIVE_S", "130"))
+    servers = [_Server(uvicorn.Config(apps[d["id"]], host="0.0.0.0", port=d["port"], log_level="warning",
+                                      timeout_keep_alive=keep)) for d in devices]
     if any(d.get("account") for d in devices):
         port = int(os.getenv("GATEWAY_PORT", "8100"))
-        servers.append(_Server(uvicorn.Config(Gateway(devices, apps), host="0.0.0.0", port=port, log_level="warning")))
+        servers.append(_Server(uvicorn.Config(Gateway(devices, apps), host="0.0.0.0", port=port, log_level="warning",
+                                              timeout_keep_alive=keep)))
         print(f"[edgemind] sign-in for every account on :{port}", flush=True)
     await asyncio.gather(*(s.serve() for s in servers), report_memory())
 

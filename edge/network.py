@@ -30,6 +30,7 @@ from pathlib import Path
 
 import httpx
 
+from .httpclient import http_client
 from .events import EventBus
 
 
@@ -49,13 +50,17 @@ class Egress:
 _SHARED: dict[tuple, tuple[float, "asyncio.Future"]] = {}  # internet probe shared by the devices in this process
 
 
-def _connect_ms(host: str, port: int) -> float | None:
+def _connect_ms(host: str, port: int) -> float | str:
+    """Connect time in ms, or "timeout" (no answer in time: maybe just slow), or "down" (refused at
+    once: no network, no route — the machine itself says there's no connection)."""
     t0 = time.perf_counter()
     try:
-        socket.create_connection((host, port), timeout=2.5).close()
+        socket.create_connection((host, port), timeout=3).close()
         return (time.perf_counter() - t0) * 1000
+    except (socket.timeout, TimeoutError):
+        return "timeout"
     except OSError:
-        return None
+        return "down"
 
 
 class NetworkGate:
@@ -132,17 +137,20 @@ class NetworkGate:
         up, (quality, self.latency_ms) = await asyncio.gather(self._probe_server(), self._probe_internet())
         # Like the internet below: one missed answer from a busy server isn't "unreachable" yet.
         self._srv_bad = 0 if up else self._srv_bad + 1
-        self.reachable = up or (self.reachable and self._probed and self._srv_bad < 2)
-        # A dead link goes offline at once; a weak one only after two slow probes in a row. Recovery
-        # needs two good probes, so a borderline connection doesn't flip back and forth.
-        if quality == "good":
+        self.reachable = up or (self.reachable and self._probed and self._srv_bad < 3)
+        # Offline means NO network, never merely a slow one:
+        #   "none"  the machine refused at once (no network, no route) -> offline right away
+        #   "slow"  no answer in time -> offline only after 3 in a row (a busy host misses a probe)
+        #   "weak"  connected, just slowly -> still online, shown as weak
+        # Recovery needs two answered probes, so a borderline link doesn't flip back and forth.
+        if quality in ("good", "weak"):
             self._bad, self._good = 0, self._good + 1
         else:
             self._bad, self._good = self._bad + 1, 0
-        self.quality = quality
-        if quality == "none" or (quality == "weak" and self._bad >= 2):
+        self.quality = "weak" if quality == "slow" else quality
+        if quality == "none" or (quality == "slow" and self._bad >= 3):
             self.internet = False
-        elif quality == "good" and (self.internet or self._good >= 2 or not self._probed):
+        elif quality in ("good", "weak") and (self.internet or self._good >= 2 or not self._probed):
             self.internet = True
         self._probed = True
         return self.online
@@ -161,7 +169,7 @@ class NetworkGate:
 
         async def check() -> bool:
             try:
-                async with httpx.AsyncClient(timeout=3) as c:
+                async with http_client(timeout=3) as c:
                     r = await c.get(self.probe_url, headers=self.headers)
                     return r.status_code < 500
             except Exception:
@@ -187,9 +195,10 @@ class NetworkGate:
             fut = asyncio.ensure_future(asyncio.gather(*(asyncio.to_thread(_connect_ms, h, p) for h, p in self.internet_hosts)))
             _SHARED[key] = (time.monotonic(), fut)
             times = await fut
-        times = [t for t in times if t is not None]
-        if not times:
-            return "none", None
+        ms = [t for t in times if not isinstance(t, str)]
+        if not ms:
+            return ("slow" if "timeout" in times else "none"), None
+        times = ms
         best = round(min(times), 1)
         return ("good" if best <= self.weak_ms else "weak"), best
 

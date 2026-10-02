@@ -855,10 +855,14 @@ async def cloud_view(team_id: str):
         raise HTTPException(404, "not a member of that team")
     cache = state["cloud_cache"].get(team_id, {"records": [], "ts": None})
     if gate.online:
+        # Every open page polls this; the sync loop refreshes the same snapshot every few seconds, so a
+        # fresh one is served as is instead of asking the server again.
+        if cache["ts"] and now_ms() - cache["ts"] < 10_000:
+            return {"live": True, "records": cache["records"], "as_of": cache["ts"]}
         try:
             async with cloud.for_team(team.collection(team_id)):
                 snap = await cloud.snapshot()
-            state["cloud_cache"] = {**state["cloud_cache"], team_id: {"records": snap, "ts": now_ms()}}
+            state.data["cloud_cache"] = {**state["cloud_cache"], team_id: {"records": snap, "ts": now_ms()}}  # memory only
             return {"live": True, "records": snap, "as_of": state["cloud_cache"][team_id]["ts"]}
         except Exception:
             pass

@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 import httpx
 from openai import APIStatusError, AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
+from .httpclient import http_client
 from .network import NetworkGate
 
 
@@ -111,7 +112,7 @@ class LocalLLM:
         if time.time() < self.down_until:
             return False
         try:
-            async with httpx.AsyncClient(timeout=2) as c:
+            async with http_client(timeout=2) as c:
                 r = await c.get(f"{self.url}/api/tags")
                 tags = [m["name"] for m in r.json().get("models", [])]
             found = next((m for m in self.preferred if _installed(m, tags)), None)
@@ -127,13 +128,13 @@ class LocalLLM:
         if not self.available:
             return
         try:
-            async with httpx.AsyncClient(timeout=180) as c:
+            async with http_client(timeout=180) as c:
                 await c.post(f"{self.url}/api/generate", json={"model": self.model, "prompt": "", "keep_alive": KEEP_ALIVE})
         except Exception:
             pass
 
     async def stream(self, messages: list[dict], max_tokens: int = 400) -> AsyncIterator[str]:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3)) as c:
+        async with http_client(timeout=httpx.Timeout(120, connect=3)) as c:
             async with c.stream(
                 "POST",
                 f"{self.url}/api/chat",

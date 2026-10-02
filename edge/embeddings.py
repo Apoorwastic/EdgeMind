@@ -22,6 +22,8 @@ from collections import OrderedDict
 import httpx
 from qdrant_edge import Bm25, Bm25Config, SparseVector
 
+from .httpclient import http_client
+
 TOKEN = re.compile(r"[a-z0-9]+")
 # One loaded model per process, shared by every device in it (edge/host.py runs many devices in one
 # process): the model is ~125 MB of RAM, which would otherwise be paid once per device.
@@ -82,7 +84,7 @@ class Embedder:
             else:
                 # nomic-embed-text is trained with task prefixes.
                 prefix = "search_query: " if kind == "query" else "search_document: "
-                async with httpx.AsyncClient(timeout=20) as c:
+                async with http_client(timeout=20) as c:
                     r = await c.post(f"{self.url}/api/embed", json={"model": self.model, "input": [prefix + text]})
                     r.raise_for_status()
                     vec = r.json()["embeddings"][0]
@@ -119,7 +121,7 @@ class Embedder:
                 self.available = False
             return self.available
         try:
-            async with httpx.AsyncClient(timeout=2) as c:
+            async with http_client(timeout=2) as c:
                 r = await c.get(f"{self.url}/api/tags")
                 names = [m["name"].split(":")[0] for m in r.json().get("models", [])]
                 self.available = self.model.split(":")[0] in names

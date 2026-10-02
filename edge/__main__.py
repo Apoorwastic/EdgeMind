@@ -9,4 +9,4 @@ from .config import settings
 # The Selector loop doesn't have that failure mode, and EdgeMind never spawns subprocesses.
 loop = "asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto"
 
-uvicorn.run("edge.app:app", host="0.0.0.0", port=settings.port, log_level="warning", loop=loop)
+uvicorn.run("edge.app:app", host="0.0.0.0", port=settings.port, log_level="warning", loop=loop, timeout_keep_alive=130)

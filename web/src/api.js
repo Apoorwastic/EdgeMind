@@ -58,6 +58,9 @@ async function send(path, init, { stream = false } = {}) {
     r = await fetchRetry(path, { ...init, signal: AbortSignal.any(signals) }, browserMode ? 1 : 4)
   } catch (e) {
     if (init.signal?.aborted) throw e // the user pressed Stop
+    // Offline means no network, not a slow answer: a request that merely timed out while the browser
+    // still has a connection leaves the page online (the next poll tries again).
+    if (hang?.aborted && navigator.onLine && !browserMode) throw new Error('The device is slow to answer. Try again in a moment.')
     setBrowser(true)
     throw new Unreachable(e.message)
   }
